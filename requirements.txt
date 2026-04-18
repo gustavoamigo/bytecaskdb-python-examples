@@ -1,2 +1,3 @@
 --extra-index-url https://gustavoamigo.github.io/bytecaskdb/python/latest/ 
 bytecaskdb
+pydoc-markdown
