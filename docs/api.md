@@ -8,93 +8,174 @@
 
 ## Contents
 
+- [ByteCaskError](#bytecaskerror)
+- [ConflictError](#conflicterror)
 - [DB](#db)
 - [DbDegraded](#dbdegraded)
+- [DegradedError](#degradederror)
 - [Options](#options)
 - [ReadOptions](#readoptions)
 - [Snapshot](#snapshot)
 - [VacuumOptions](#vacuumoptions)
 - [WriteOptions](#writeoptions)
-- [WritePlan](#writeplan)
 
 > **Iterator types** (`EntryIterator`, `KeyIterator`, `ReverseEntryIterator`, `ReverseKeyIterator`) implement the standard Python iterator protocol (`__iter__` / `__next__`) and are returned by the `iter_from`, `keys_from`, `riter_from`, and `rkeys_from` methods.
 
 ---
 
+## ByteCaskError
+
+Base for all bytecaskdb_ext errors.
+
+---
+
+## ConflictError
+
+Raised by a Transaction when apply_batch detects a write conflict.
+
+---
+
 ## DB
 
-ByteCaskDB database handle.
+Pythonic wrapper around bytecaskdb.DB.
 
-Open or create a database with DB.open(path).
+Open with DB.open(path) or DB.open(path, max_file_bytes=..., ...).
 
 ### Properties
 
 | Property | Description |
 |----------|-------------|
-| `degraded_reason` | Diagnostic string describing why the engine degraded, or empty. |
-| `is_degraded` | True if the engine is in a degraded state. |
+| `) -> None` | Delete all keys in [from_key, to_key) with a single disk append. |
+| `) -> bytes | None` | Return value for *key*, or *default* if not found. |
+| `) -> bool` | Run one vacuum pass. Return True if a file was vacuumed. Call in a loop to compact all eligible files::     while db.vacuum():         pass |
+| `Class methods defined here:` |  |
+| `) -> 'DB'` |  |
+| `degraded_reason` |  |
+| `is_degraded` |  |
 
 ### Methods
 
-#### `apply_batch(self, plan: WritePlan, opts: WriteOptions | None = None) -> bool`
+#### `__contains__(...)`
 
-Apply plan atomically. Return True if committed, False on conflict.
+Return True if *key* exists. No disk I/O.
 
-#### `contains_key(self, key: bytes) -> bool`
+#### `__delitem__(...)`
 
-Return True if key exists. No disk I/O.
+Delete *key*. Silently succeeds if the key does not exist.
 
-#### `del_(self, key: bytes, opts: WriteOptions | None = None) -> bool`
+#### `__getitem__(...)`
 
-Delete key. Return True if it existed.
+Return value for *key*; raises KeyError if not found.
 
-#### `del_range(self, from_key: bytes, to_key: bytes, opts: WriteOptions | None = None) -> None`
+#### `__setitem__(...)`
 
-Delete all keys in [from_key, to_key) with a single disk append.
+Write key → value with default options (sync=True).
 
-#### `get(self, key: bytes, opts: ReadOptions | None = None) -> object`
+#### `batch(...)`
 
-Return the value for key, or None if not found.
+Context manager for an atomic batch of writes/deletes.
+Changes are committed on ``__exit__``.  No conflict detection.
+Example::
+    with db.batch() as b:
+        b[b"key1"] = b"value1"
+        del b[b"key2"]
+        b.delete_range(b"log:001", b"log:010")
 
-#### `iter_from(self, from_key: bytes = b'', opts: ReadOptions | None = None) -> EntryIterator`
+#### `delete(...)`
 
-Iterate (key, value) pairs in ascending order from from_key.
+Delete *key*. Returns True if the key existed.
 
-#### `keys_from(self, from_key: bytes = b'', opts: ReadOptions | None = None) -> KeyIterator`
+#### `delete_range(...)`
 
-Iterate keys in ascending order. No disk I/O.
+self,
+from_key: bytes,
+to_key: bytes,
+*,
+sync: bool = True,
+solo: bool = False
 
-#### `put(self, key: bytes, value: bytes, opts: WriteOptions | None = None) -> None`
+#### `get(...)`
 
-Write key -> value. Overwrites any existing value.
+self,
+key: bytes,
+default: bytes | None = None,
+*,
+verify_checksums: bool = False
 
-#### `resume(self) -> None`
+#### `items(...)`
+
+Iterate (key, value) pairs in ascending order from *start*.
+
+#### `keys(...)`
+
+Iterate keys in ascending order from *start*. No disk I/O.
+
+#### `prefix(...)`
+
+Iterate (key, value) pairs whose key starts with *pfx*,
+ascending.
+
+#### `put(...)`
+
+Write key → value.
+
+#### `resume(...)`
 
 Attempt recovery from a degraded state.
 
-#### `riter_from(self, from_key: bytes = b'', opts: ReadOptions | None = None) -> ReverseEntryIterator`
+#### `ritems(...)`
 
-Iterate (key, value) pairs in descending order from from_key.
+Iterate (key, value) pairs in descending order from *start*.
+When *start* is b'' (default), begins at the last key.
 
-#### `rkeys_from(self, from_key: bytes = b'', opts: ReadOptions | None = None) -> ReverseKeyIterator`
+#### `rkeys(...)`
 
-Iterate keys in descending order. No disk I/O.
+Iterate keys in descending order from *start*. No disk I/O.
 
-#### `snapshot(self) -> Snapshot`
+#### `rprefix(...)`
 
-Return a frozen, read-only view of the database at this instant.
+Iterate (key, value) pairs whose key starts with *pfx*,
+descending.
 
-#### `vacuum(self, opts: VacuumOptions | None = None) -> bool`
+#### `snapshot(...)`
 
-Run one vacuum pass. Return True if a file was vacuumed.
+Return a frozen read-only view of the database at this instant.
 
-#### *static*  `open(path: str | os.PathLike, opts: Options | None = None) -> DB`
+#### `transaction(...)`
 
-Open or create a database at path.
+Context manager for a snapshot-backed transaction.
+Reads come from a snapshot taken at entry.  Writes are staged and
+committed atomically on ``__exit__``.  Raises ``ConflictError`` if
+a concurrent modification was detected.
+Example::
+    with db.transaction() as txn:
+        stock = int(txn[b"stock"])
+        txn[b"stock"] = str(stock - 1).encode()
+
+#### `vacuum(...)`
+
+self,
+*,
+fragmentation_threshold: float | None = None,
+absorb_threshold: int | None = None
+
+#### `open(...)`
+
+path: str,
+*,
+max_file_bytes: int | None = None,
+recovery_threads: int | None = None,
+fail_recovery_on_crc_errors: bool | None = None
 
 ---
 
 ## DbDegraded
+
+---
+
+## DegradedError
+
+Raised when the engine enters a degraded state.
 
 ---
 
@@ -126,33 +207,45 @@ Per-read options for get, iter_from, etc.
 
 ## Snapshot
 
-Frozen, read-only view of the database at a point in time.
+Read-only frozen view of the database.
+
+Supports the same dict-like reads and iteration as DB.
+Use as a context manager to ensure resources are released promptly.
 
 ### Methods
 
-#### `contains_key(self, key: bytes) -> bool`
+#### `__contains__(...)`
 
-Return True if key exists. No disk I/O.
+#### `__getitem__(...)`
 
-#### `get(self, key: bytes) -> object`
+#### `get(...)`
 
-Return the value for key, or None if not found.
+#### `items(...)`
 
-#### `iter_from(self, from_key: bytes = b'') -> EntryIterator`
+Iterate (key, value) pairs in ascending order from *start*.
 
-Iterate (key, value) pairs in ascending order from from_key.
+#### `keys(...)`
 
-#### `keys_from(self, from_key: bytes = b'') -> KeyIterator`
+Iterate keys in ascending order from *start*. No disk I/O.
 
-Iterate keys in ascending order. No disk I/O.
+#### `prefix(...)`
 
-#### `riter_from(self, from_key: bytes = b'') -> ReverseEntryIterator`
+Iterate (key, value) pairs whose key starts with *pfx*,
+ascending.
 
-Iterate (key, value) pairs in descending order from from_key.
+#### `ritems(...)`
 
-#### `rkeys_from(self, from_key: bytes = b'') -> ReverseKeyIterator`
+Iterate (key, value) pairs in descending order from *start*.
+When *start* is b'' (default), begins at the last key.
 
-Iterate keys in descending order. No disk I/O.
+#### `rkeys(...)`
+
+Iterate keys in descending order from *start*. No disk I/O.
+
+#### `rprefix(...)`
+
+Iterate (key, value) pairs whose key starts with *pfx*,
+descending.
 
 ---
 
@@ -179,51 +272,5 @@ Per-write options for put, del_, apply_batch, etc.
 |----------|-------------|
 | `solo` | If True, bypass group commit (for benchmarking). |
 | `sync` | If True (default), call fdatasync after write. |
-
----
-
-## WritePlan
-
-Atomic write plan for DB.apply_batch().
-
-Construct without arguments for a simple unconditional batch.
-Construct with a Snapshot to enable ensure_unchanged guards and
-automatic write-write conflict detection.
-
-### Properties
-
-| Property | Description |
-|----------|-------------|
-| `has_snapshot` | True if this plan was constructed with a snapshot. |
-
-### Methods
-
-#### `del_(self, key: bytes) -> None`
-
-Stage a key deletion.
-
-#### `del_range(self, from_key: bytes, to_key: bytes) -> None`
-
-Stage a range deletion: all keys in [from_key, to_key).
-
-#### `ensure_absent(self, key: bytes) -> None`
-
-Guard: key must be absent at commit time.
-
-#### `ensure_present(self, key: bytes) -> None`
-
-Guard: key must exist at commit time.
-
-#### `ensure_range_unchanged(self, from_key: bytes, to_key: bytes) -> None`
-
-Guard: no key in [from_key, to_key) changed since the snapshot.
-
-#### `ensure_unchanged(self, key: bytes) -> None`
-
-Guard: key must not have changed since the snapshot.
-
-#### `put(self, key: bytes, value: bytes) -> None`
-
-Stage a key-value write.
 
 ---

@@ -10,38 +10,35 @@ def main():
         db = bc.DB.open(tmpdir)
 
         # --- Single-key operations ---
-        db.put(b"user:1", b"alice")
-        db.put(b"user:2", b"bob")
-        db.put(b"user:3", b"carol")
+        db[b"user:1"] = b"alice"
+        db[b"user:2"] = b"bob"
+        db[b"user:3"] = b"carol"
 
         val = db.get(b"user:1")
         print(f"get(user:1) = {val}")  # b'alice'
 
-        exists = db.contains_key(b"user:2")
-        print(f"contains_key(user:2) = {exists}")  # True
+        exists = b"user:2" in db
+        print(f"'user:2' in db = {exists}")  # True
 
-        existed = db.del_(b"user:3")
-        print(f"del_(user:3) existed = {existed}")  # True
+        del db[b"user:3"]
+        print(f"del db[b'user:3']")
 
         gone = db.get(b"user:3")
         print(f"get(user:3) after delete = {gone}")  # None
 
         # --- Batch operations ---
-        plan = bc.WritePlan()
-        plan.put(b"user:10", b"dave")
-        plan.put(b"user:11", b"eve")
-        plan.del_(b"user:1")
-        db.apply_batch(plan)
+        with db.batch() as b:
+            b[b"user:10"] = b"dave"
+            b[b"user:11"] = b"eve"
+            del b[b"user:1"]
 
         print(f"\nAfter batch:")
         print(f"  get(user:1) = {db.get(b'user:1')}")  # None (deleted)
         print(f"  get(user:10) = {db.get(b'user:10')}")  # b'dave'
         print(f"  get(user:11) = {db.get(b'user:11')}")  # b'eve'
 
-        # --- Options ---
-        opts = bc.WriteOptions()
-        opts.sync = False  # skip fdatasync for higher throughput
-        db.put(b"fast_key", b"fast_value", opts)
+        # --- Write options via keyword arguments ---
+        db.put(b"fast_key", b"fast_value", sync=False)
         print(f"\nNoSync write: get(fast_key) = {db.get(b'fast_key')}")
 
         # --- Degraded state check ---

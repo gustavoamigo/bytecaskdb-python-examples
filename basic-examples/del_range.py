@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Range deletions: del_range on DB and WritePlan.del_range in a batch."""
+"""Range deletions: delete_range on DB and in a batch."""
 
 import tempfile
 import bytecaskdb as bc
@@ -10,31 +10,28 @@ def main():
         db = bc.DB.open(tmpdir)
 
         # Seed data
-        opts = bc.WriteOptions()
-        opts.sync = False
         for i in range(1, 11):
-            db.put(f"log:{i:03d}".encode(), f"event_{i}".encode(), opts)
+            db.put(f"log:{i:03d}".encode(), f"event_{i}".encode(), sync=False)
 
-        print("=== Before del_range ===")
-        for key, value in db.iter_from():
+        print("=== Before delete_range ===")
+        for key, value in db.items():
             print(f"  {key} -> {value}")
 
-        # --- DB.del_range: delete keys in [from_key, to_key) ---
+        # --- DB.delete_range: delete keys in [from_key, to_key) ---
         # This deletes log:004 through log:006 (half-open range).
-        print("\n=== del_range(b'log:004', b'log:007') ===")
-        db.del_range(b"log:004", b"log:007")
+        print("\n=== delete_range(b'log:004', b'log:007') ===")
+        db.delete_range(b"log:004", b"log:007")
 
-        for key, value in db.iter_from():
+        for key, value in db.items():
             print(f"  {key} -> {value}")
 
-        # --- WritePlan.del_range: atomic range deletion in a batch ---
-        print("\n=== Batch: del_range + put ===")
-        plan = bc.WritePlan()
-        plan.del_range(b"log:008", b"log:011")  # remove log:008..010
-        plan.put(b"log:summary", b"kept 1-3, 7")
-        db.apply_batch(plan)
+        # --- Batch: atomic range deletion + put ---
+        print("\n=== Batch: delete_range + put ===")
+        with db.batch() as b:
+            b.delete_range(b"log:008", b"log:011")  # remove log:008..010
+            b[b"log:summary"] = b"kept 1-3, 7"
 
-        for key, value in db.iter_from():
+        for key, value in db.items():
             print(f"  {key} -> {value}")
 
         print("\nDone.")

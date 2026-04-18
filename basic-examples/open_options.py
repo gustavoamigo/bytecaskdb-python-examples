@@ -7,36 +7,27 @@ import bytecaskdb as bc
 
 def main():
     with tempfile.TemporaryDirectory() as tmpdir:
-        # --- Options: configure how the database opens ---
-        opts = bc.Options()
+        # --- Open with keyword options ---
+        db = bc.DB.open(
+            tmpdir,
+            max_file_bytes=4 * 1024 * 1024,  # 4 MiB (default 64 MiB)
+            recovery_threads=2,                # default 4
+            fail_recovery_on_crc_errors=True,  # default True
+        )
 
-        # Active-file rotation threshold.
-        # When the active data file exceeds this size, a new file is started.
-        # Default is 64 MiB. A smaller value creates more files (useful for
-        # faster vacuum cycles at the cost of more file handles).
-        opts.max_file_bytes = 4 * 1024 * 1024  # 4 MiB
-
-        # Number of threads used during recovery (hint-file replay at open).
-        # Default is 4.
-        opts.recovery_threads = 2
-
-        # If True (default), CRC errors found during recovery cause an
-        # exception.  Set to False to silently skip corrupted entries.
-        opts.fail_recovery_on_crc_errors = True
-
-        db = bc.DB.open(tmpdir, opts)
-
-        wopts = bc.WriteOptions()
-        wopts.sync = False
         for i in range(100):
-            db.put(f"k:{i}".encode(), b"v" * 512, wopts)
+            db.put(f"k:{i}".encode(), b"v" * 512, sync=False)
 
-        print(f"Wrote 100 keys with max_file_bytes={opts.max_file_bytes}")
+        print(f"Wrote 100 keys with max_file_bytes=4 MiB")
 
         # Re-open the database to exercise recovery.
         del db
-        db = bc.DB.open(tmpdir, opts)
-        print(f"Re-opened — recovery_threads={opts.recovery_threads}")
+        db = bc.DB.open(
+            tmpdir,
+            max_file_bytes=4 * 1024 * 1024,
+            recovery_threads=2,
+        )
+        print(f"Re-opened — recovery_threads=2")
         print(f"  get(k:0) = {db.get(b'k:0')}")
         print(f"  get(k:99) = {db.get(b'k:99')}")
 
