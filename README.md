@@ -45,5 +45,16 @@ The pip package is available directly from the repo:
 pip install --extra-index-url https://gustavoamigo.github.io/bytecaskdb/python/latest/ bytecaskdb
 ```
 
+### Supported Platforms
+
+| OS | Architecture | Python |
+|----|-------------|--------|
+| Linux (most distros*) | x86_64 | 3.12, 3.13, 3.14 |
+| macOS | arm64 (Apple Silicon) | 3.12, 3.13, 3.14 |
+
+<sub>* Built with [manylinux_2_28](https://github.com/pypa/manylinux#manylinux_2_28-almalinux-8-based) — compatible with Ubuntu 18.04+, Debian 10+, Fedora 28+, and similar.</sub>
+
+No Windows support yet — hackers are welcome to change that!
+
 > **Note:** This is an early development version.
 
