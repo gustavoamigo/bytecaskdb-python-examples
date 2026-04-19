@@ -7,9 +7,12 @@ responses, S3-style headers) are confined to this module.
 
 from __future__ import annotations
 
+import logging
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from urllib.parse import unquote
+
+log = logging.getLogger(__name__)
 
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -47,6 +50,45 @@ def _iso_time(ts: float) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime(
         "%Y-%m-%dT%H:%M:%S.000Z"
     )
+
+
+def _http_date(ts: float) -> str:
+    """RFC 7231 HTTP-date, e.g. Mon, 02 Jan 2006 15:04:05 GMT."""
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime(
+        "%a, %d %b %Y %H:%M:%S GMT"
+    )
+
+
+def _decode_aws_chunked(body: bytes) -> bytes:
+    """Strip aws-chunked framing from a streaming SigV4 body.
+
+    Each chunk has the form:  SIZE_HEX[;chunk-signature=...]\r\nDATA\r\n
+    The body is terminated by a zero-size chunk.
+    """
+    result: list[bytes] = []
+    pos = 0
+    end = len(body)
+    while pos < end:
+        crlf = body.find(b'\r\n', pos)
+        if crlf == -1:
+            break
+        header = body[pos:crlf].split(b';', 1)[0]  # strip any ;chunk-signature=...
+        chunk_size = int(header, 16)
+        pos = crlf + 2
+        if chunk_size == 0:
+            break
+        result.append(body[pos:pos + chunk_size])
+        pos += chunk_size + 2  # skip trailing \r\n
+    return b''.join(result)
+
+
+def _maybe_decode_aws_chunked(request: Request, body: bytes) -> bytes:
+    """Decode body if the request uses aws-chunked transfer encoding."""
+    if request.headers.get("x-amz-decoded-content-length") or \
+            "aws-chunked" in request.headers.get("content-encoding", "") or \
+            "STREAMING-" in request.headers.get("x-amz-content-sha256", ""):
+        return _decode_aws_chunked(body)
+    return body
 
 
 # ── Handlers ─────────────────────────────────────────────────────────────────
@@ -90,19 +132,68 @@ async def handle_bucket(request: Request) -> Response:
         return _error_xml("NoSuchBucket", f"Bucket not found: {bucket}", 404)
 
     if request.method == "GET":
+        # GetBucketLocation
+        if "location" in request.query_params:
+            root = ET.Element("LocationConstraint")
+            root.text = ""
+            return _xml_response(root)
         # ListObjectsV2
         return await list_objects(request, storage, bucket)
 
+    if request.method == "POST":
+        # DeleteObjects
+        if "delete" in request.query_params:
+            return await handle_delete_objects(request, storage, bucket)
+
     return _error_xml("NotImplemented", "Not implemented", 501)
+
+
+async def handle_delete_objects(request: Request, storage: BlobStorage,
+                                bucket: str) -> Response:
+    body = await request.body()
+    try:
+        xml_root = ET.fromstring(body)
+    except ET.ParseError as e:
+        return _error_xml("MalformedXML", str(e), 400)
+
+    ns = {"s3": ""}
+    deleted = []
+    errors = []
+    for obj in xml_root.findall("Object") or xml_root.findall("{*}Object"):
+        key_el = obj.find("Key") or obj.find("{*}Key")
+        if key_el is None:
+            continue
+        key = key_el.text or ""
+        try:
+            storage.delete_object(bucket, key)
+            deleted.append(key)
+            log.debug("deleted %s/%s", bucket, key)
+        except Exception as exc:
+            log.warning("delete failed %s/%s: %s", bucket, key, exc)
+            errors.append((key, str(exc)))
+
+    root = ET.Element("DeleteResult")
+    for key in deleted:
+        d = ET.SubElement(root, "Deleted")
+        ET.SubElement(d, "Key").text = key
+    for key, msg in errors:
+        e = ET.SubElement(root, "Error")
+        ET.SubElement(e, "Key").text = key
+        ET.SubElement(e, "Code").text = "InternalError"
+        ET.SubElement(e, "Message").text = msg
+    return _xml_response(root)
 
 
 async def list_objects(request: Request, storage: BlobStorage,
                        bucket: str) -> Response:
     prefix = request.query_params.get("prefix", "")
-    delimiter = request.query_params.get("delimiter", "")
+    # Use delimiter from query param; only default to "/" when not provided at all
+    delimiter = request.query_params.get("delimiter", None)
+    if delimiter is None:
+        delimiter = "/"
 
     common_prefixes, contents = storage.list_objects(
-        bucket, prefix=prefix, delimiter=delimiter if delimiter else "/"
+        bucket, prefix=prefix, delimiter=delimiter
     )
 
     root = ET.Element("ListBucketResult")
@@ -162,7 +253,9 @@ async def handle_put_object(request: Request, storage: BlobStorage,
     upload_id = request.query_params.get("uploadId")
 
     if part_number and upload_id:
-        body = await request.body()
+        body = _maybe_decode_aws_chunked(request, await request.body())
+        log.debug("PUT_PART %s/%s part=%s upload=%s body_size=%d",
+                  bucket, key, part_number, upload_id, len(body))
         try:
             etag = storage.upload_part(upload_id, int(part_number), body)
         except UploadNotFoundError:
@@ -170,7 +263,7 @@ async def handle_put_object(request: Request, storage: BlobStorage,
         return Response(status_code=200, headers={"ETag": f'"{etag}"'})
 
     # Regular PutObject
-    body = await request.body()
+    body = _maybe_decode_aws_chunked(request, await request.body())
     content_type = request.headers.get("content-type", "application/octet-stream")
 
     # Collect x-amz-meta-* headers
@@ -183,6 +276,8 @@ async def handle_put_object(request: Request, storage: BlobStorage,
     meta = storage.put_object(bucket, key, body,
                               content_type=content_type,
                               user_metadata=user_metadata)
+    log.debug("PUT %s/%s body_size=%d stored_size=%d etag=%s",
+              bucket, key, len(body), meta["size"], meta["etag"])
     return Response(status_code=200, headers={"ETag": f'"{meta["etag"]}"'})
 
 
@@ -193,11 +288,14 @@ async def handle_get_object(request: Request, storage: BlobStorage,
     except BlobNotFoundError:
         return _error_xml("NoSuchKey", f"Object not found: {key}", 404)
 
+    log.debug("GET %s/%s stored_size=%d chunk_count=%d chunk_size=%d",
+              bucket, key, meta["size"], meta["chunk_count"], meta.get("chunk_size", 0))
+
     headers = {
         "Content-Type": meta["content_type"],
         "ETag": f'"{meta["etag"]}"',
         "Content-Length": str(meta["size"]),
-        "Last-Modified": _iso_time(
+        "Last-Modified": _http_date(
             meta.get("completed_at", meta.get("created_at", 0))
         ),
     }
@@ -250,11 +348,14 @@ async def handle_head_object(request: Request, storage: BlobStorage,
     except BlobNotFoundError:
         return Response(status_code=404)
 
+    log.debug("HEAD %s/%s stored_size=%d chunk_count=%d chunk_size=%d",
+              bucket, key, meta["size"], meta["chunk_count"], meta.get("chunk_size", 0))
+
     headers = {
         "Content-Type": meta["content_type"],
         "ETag": f'"{meta["etag"]}"',
         "Content-Length": str(meta["size"]),
-        "Last-Modified": _iso_time(
+        "Last-Modified": _http_date(
             meta.get("completed_at", meta.get("created_at", 0))
         ),
     }
@@ -287,6 +388,10 @@ async def handle_post_object(request: Request, storage: BlobStorage,
         except BlobStorageError as e:
             return _error_xml("InternalError", str(e), 500)
 
+        log.debug("COMPLETE_MPU %s/%s stored_size=%d chunk_count=%d chunk_size=%d etag=%s",
+                  bucket, key, meta["size"], meta["chunk_count"],
+                  meta.get("chunk_size", 0), meta["etag"])
+
         root = ET.Element("CompleteMultipartUploadResult")
         ET.SubElement(root, "Bucket").text = bucket
         ET.SubElement(root, "Key").text = key
@@ -305,7 +410,9 @@ def create_app(data_dir: str = "./blob_data",
     routes = [
         Route("/", list_buckets, methods=["GET"]),
         Route("/{bucket}", handle_bucket,
-              methods=["PUT", "DELETE", "GET", "HEAD"]),
+              methods=["PUT", "DELETE", "GET", "HEAD", "POST"]),
+        Route("/{bucket}/", handle_bucket,
+              methods=["PUT", "DELETE", "GET", "HEAD", "POST"]),
         Route("/{bucket}/{key:path}", handle_object,
               methods=["PUT", "GET", "DELETE", "HEAD", "POST"]),
     ]

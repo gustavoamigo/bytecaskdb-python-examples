@@ -127,6 +127,24 @@ The server implements a minimal subset of the S3 protocol:
 - `POST /{bucket}/{key}?uploadId=X` — complete multipart upload
 - `DELETE /{bucket}/{key}?uploadId=X` — abort multipart upload
 
+## Benchmarking with warp
+
+Install [warp](https://github.com/minio/warp) and configure rclone with a `local-blob` remote pointing at `http://localhost:8080`.
+
+In one terminal, start the server:
+
+```bash
+python run_server.py --host "::"
+```
+
+In another terminal, create the bucket and run the benchmark:
+
+```bash
+rclone mkdir local-blob:warp-test && warp mixed --host localhost:8080 --access-key dummy --secret-key dummy --bucket warp-test --concurrent 32 --duration 5s --tls=false
+```
+
+warp writes result files (`*.csv.zst`) to the current directory — see `.gitignore`.
+
 ## Tests
 
 ```bash
