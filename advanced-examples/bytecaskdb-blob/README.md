@@ -62,46 +62,6 @@ print(resp["Body"].read())  # b'Hello, World!'
 
 See `example_client.py` for a more complete demo.
 
-## Python API
-
-```python
-from bytecaskdb_blob import BlobStorage
-
-storage = BlobStorage(path="./blob_data", chunk_size=4 * 1024 * 1024)
-
-# Buckets
-storage.create_bucket("photos")
-storage.list_buckets()
-storage.delete_bucket("photos")  # recursive delete with force=True
-
-# Simple upload / download
-storage.put_object("photos", "2024/sunset.jpg", data, content_type="image/jpeg")
-data = storage.get_object("photos", "2024/sunset.jpg")
-
-# Streaming upload
-with storage.upload("photos", "video/raw.mp4") as upload:
-    for chunk in stream:
-        upload.write(chunk)
-
-# Streaming download
-for chunk in storage.stream_object("photos", "video/raw.mp4"):
-    process(chunk)
-
-# Range request
-data = storage.get_range("photos", "video/raw.mp4", start=5_000_000, end=8_999_999)
-
-# List with delimiter (folder-like)
-folders, files = storage.list_objects("photos", prefix="2024/", delimiter="/")
-
-# Recursive delete
-storage.delete_prefix("photos", "2024/")
-
-# Multipart upload
-upload_id = storage.create_multipart_upload("photos", "huge.tar")
-storage.upload_part(upload_id, part_number=1, data=chunk1)
-storage.upload_part(upload_id, part_number=2, data=chunk2)
-storage.complete_multipart_upload(upload_id)
-```
 
 ## Key Layout
 
@@ -110,7 +70,6 @@ blob:{bucket}/{path}:meta          → JSON metadata (size, content_type, etag, 
 blob:{bucket}/{path}:chunk:{nnnnn} → raw bytes (5-digit zero-padded index)
 bucket:{name}:meta                 → bucket metadata
 upload:{upload_id}:meta            → multipart upload metadata
-upload:{upload_id}:part:{nnnnn}    → staged multipart parts
 ```
 
 ## Design Notes
@@ -122,7 +81,7 @@ upload:{upload_id}:part:{nnnnn}    → staged multipart parts
 | Atomic upload completion | `batch()` — last chunk + meta flip land together |
 | Stream large blobs | Ordered iteration via `prefix()` |
 | Fast metadata lookup | `:meta` keys read without touching chunk data |
-| Multipart abort | `delete_range` on staging prefix |
+| Multipart abort | `delete_range` on blob prefix + delete upload meta key |
 
 ## HTTP API
 
@@ -139,7 +98,7 @@ The server implements a minimal subset of the S3 protocol:
 
 ## Benchmarking with warp
 
-Install [warp](https://github.com/minio/warp) and configure rclone with a `local-blob` remote pointing at `http://localhost:8080`.
+Install [warp](https://github.com/minio/warp) and run a mixed S3 benchmark against the server.
 
 In one terminal, start the server:
 
@@ -159,7 +118,7 @@ go install github.com/minio/warp@latest
 # make sure ~/go/bin is in your PATH
 export PATH=$PATH:~/go/bin
 
-curl -X PUT http://localhost:8080/warp-test && warp mixed --host localhost:8080 --access-key dummy --secret-key dummy --bucket warp-test --concurrent 32 --duration 60s --tls=false --noclear  && curl -X DELETE "http://localhost:8080/warp-test?force=true"
+curl -X PUT http://localhost:8080/warp-test && warp mixed --host localhost:8080 --access-key dummy --secret-key dummy --bucket warp-test --concurrent 32 --duration 60s --tls=false --noclear --web  && curl -X DELETE "http://localhost:8080/warp-test?force=true"
 ```
 
 warp writes result files (`*.csv.zst`) to the current directory — see `.gitignore`.
