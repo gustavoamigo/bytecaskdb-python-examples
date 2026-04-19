@@ -140,6 +140,15 @@ python run_server.py --host "::"
 In another terminal, create the bucket and run the benchmark:
 
 ```bash
+# install Go first if you don't have it
+sudo dnf install golang -y
+
+# install warp
+go install github.com/minio/warp@latest
+
+# make sure ~/go/bin is in your PATH
+export PATH=$PATH:~/go/bin
+
 rclone mkdir local-blob:warp-test && warp mixed --host localhost:8080 --access-key dummy --secret-key dummy --bucket warp-test --concurrent 32 --duration 5s --tls=false
 ```
 
