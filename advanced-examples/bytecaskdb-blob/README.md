@@ -1,0 +1,148 @@
+# bytecaskdb-blob
+
+A persistent blob storage engine built on [ByteCaskDB](https://github.com/gustavoamigo/bytecaskdb), with an HTTP API compatible with S3 clients (boto3, rclone, aws cli).
+
+## Features
+
+- **Folder-like hierarchy** via prefix-based keys
+- **Chunked storage** for efficient handling of large objects (configurable chunk size, default 4 MiB)
+- **Atomic uploads** — last chunk and metadata land together in a single batch
+- **Range requests** (`Range: bytes=x-y`) for streaming and resumable downloads
+- **Recursive prefix deletion** — delete millions of objects in a single append
+- **Multipart uploads** with staging and atomic commit
+- **Streaming uploads** via context manager
+- **S3-compatible HTTP API** — works with boto3, rclone, and the aws cli
+
+## Quick Start
+
+### Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### Start the server
+
+```bash
+python run_server.py
+```
+
+The server listens on `http://localhost:8080` by default. Use `--data-dir`, `--host`, `--port`, and `--chunk-size` to customize.
+
+### Use with boto3
+
+```python
+import boto3
+from botocore.config import Config
+
+s3 = boto3.client(
+    "s3",
+    endpoint_url="http://localhost:8080",
+    aws_access_key_id="dummy",
+    aws_secret_access_key="dummy",
+    config=Config(signature_version="s3v4"),
+    region_name="us-east-1",
+)
+
+s3.create_bucket(Bucket="my-bucket")
+s3.put_object(Bucket="my-bucket", Key="hello.txt", Body=b"Hello, World!")
+resp = s3.get_object(Bucket="my-bucket", Key="hello.txt")
+print(resp["Body"].read())  # b'Hello, World!'
+```
+
+See `example_client.py` for a more complete demo.
+
+## Python API
+
+```python
+from bytecaskdb_blob import BlobStorage
+
+storage = BlobStorage(path="./blob_data", chunk_size=4 * 1024 * 1024)
+
+# Buckets
+storage.create_bucket("photos")
+storage.list_buckets()
+storage.delete_bucket("photos")  # recursive delete with force=True
+
+# Simple upload / download
+storage.put_object("photos", "2024/sunset.jpg", data, content_type="image/jpeg")
+data = storage.get_object("photos", "2024/sunset.jpg")
+
+# Streaming upload
+with storage.upload("photos", "video/raw.mp4") as upload:
+    for chunk in stream:
+        upload.write(chunk)
+
+# Streaming download
+for chunk in storage.stream_object("photos", "video/raw.mp4"):
+    process(chunk)
+
+# Range request
+data = storage.get_range("photos", "video/raw.mp4", start=5_000_000, end=8_999_999)
+
+# List with delimiter (folder-like)
+folders, files = storage.list_objects("photos", prefix="2024/", delimiter="/")
+
+# Recursive delete
+storage.delete_prefix("photos", "2024/")
+
+# Multipart upload
+upload_id = storage.create_multipart_upload("photos", "huge.tar")
+storage.upload_part(upload_id, part_number=1, data=chunk1)
+storage.upload_part(upload_id, part_number=2, data=chunk2)
+storage.complete_multipart_upload(upload_id)
+```
+
+## Key Layout
+
+```
+blob:{bucket}/{path}:meta          → JSON metadata (size, content_type, etag, ...)
+blob:{bucket}/{path}:chunk:{nnnnn} → raw bytes (5-digit zero-padded index)
+bucket:{name}:meta                 → bucket metadata
+upload:{upload_id}:meta            → multipart upload metadata
+upload:{upload_id}:part:{nnnnn}    → staged multipart parts
+```
+
+## Design Notes
+
+| Requirement | ByteCaskDB primitive |
+|-------------|---------------------|
+| List folder contents | In-memory radix tree prefix walk (no disk I/O) |
+| Recursive folder delete | `delete_range` — single append regardless of object count |
+| Atomic upload completion | `batch()` — last chunk + meta flip land together |
+| Stream large blobs | Ordered iteration via `prefix()` |
+| Fast metadata lookup | `:meta` keys read without touching chunk data |
+| Multipart abort | `delete_range` on staging prefix |
+
+## HTTP API
+
+The server implements a minimal subset of the S3 protocol:
+
+- `GET /` — list buckets
+- `PUT / DELETE / HEAD /{bucket}` — bucket operations
+- `PUT / GET / DELETE / HEAD /{bucket}/{key}` — object operations
+- `GET /{bucket}?list-type=2&prefix=&delimiter=/` — list objects
+- `POST /{bucket}/{key}?uploads` — create multipart upload
+- `PUT /{bucket}/{key}?partNumber=N&uploadId=X` — upload part
+- `POST /{bucket}/{key}?uploadId=X` — complete multipart upload
+- `DELETE /{bucket}/{key}?uploadId=X` — abort multipart upload
+
+## Tests
+
+```bash
+# Storage engine tests (no HTTP)
+pytest tests/test_storage.py -v
+
+# HTTP server integration tests (uses boto3)
+pytest tests/test_server.py -v
+```
+
+## Non-goals
+
+- **Distributed storage.** Single-node engine. For multi-node, use MinIO or SeaweedFS.
+- **Full S3 parity.** Versioning, ACLs, lifecycle policies, object lock, and replication are not implemented.
+- **Authentication.** No signature verification. Run behind a trusted network boundary or add an auth proxy.
+
+## License
+
+MIT
