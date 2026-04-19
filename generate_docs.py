@@ -11,10 +11,12 @@ from pathlib import Path
 CLASS_HEADER = re.compile(r"^    class (\w+)\((.+)\)$")
 SECTION_DIVIDER = re.compile(r"^     \|  -{10,}")
 SECTION_TITLE = re.compile(
-    r"^     \|  (Methods defined here|Static methods defined here|"
+    r"^     \|  (Methods defined here|Class methods defined here|"
+    r"Static methods defined here|"
     r"Readonly properties defined here|Data descriptors defined here|"
     r"Data and other attributes defined here|"
-    r"Methods inherited from .+|Static methods inherited from .+|"
+    r"Methods inherited from .+|Class methods inherited from .+|"
+    r"Static methods inherited from .+|"
     r"Data descriptors inherited from .+|Method resolution order):$"
 )
 METHOD_DEF = re.compile(r"^     \|  (\w+)\(")
@@ -163,9 +165,34 @@ def parse_pydoc(text: str):
             mm = METHOD_DEF.match(line)
             if mm:
                 name = mm.group(1)
-                i += 1
-                # Collect signature and doc lines
-                sig_lines: list[str] = []
+                content = line[8:].rstrip() if len(line) > 8 else ""
+
+                # Multi-line signature: opening paren not closed on this line
+                if content.count("(") > content.count(")"):
+                    sig_parts = [content]
+                    i += 1
+                    while i < len(lines):
+                        raw = lines[i]
+                        if not raw.startswith("     |"):
+                            break
+                        part = raw[7:].rstrip() if len(raw) > 7 else ""
+                        if not part:
+                            i += 1
+                            continue
+                        sig_parts.append(part.strip())
+                        i += 1
+                        joined = "".join(sig_parts)
+                        if joined.count("(") <= joined.count(")"):
+                            break
+                    signature = " ".join(sig_parts)
+                    signature = re.sub(r"\(\s+", "(", signature)
+                    signature = re.sub(r"\s+\)", ")", signature)
+                    signature = re.sub(r"\s*,\s*", ", ", signature)
+                else:
+                    signature = content
+                    i += 1
+
+                # Collect doc lines
                 doc_lines: list[str] = []
                 while i < len(lines):
                     if SECTION_DIVIDER.match(lines[i]) or SECTION_TITLE.match(lines[i]):
@@ -175,15 +202,11 @@ def parse_pydoc(text: str):
                     if METHOD_DEF.match(lines[i]):
                         break
                     if PROPERTY_LINE.match(lines[i]) and not DOC_LINE.match(lines[i]):
-                        # Could be next property
                         next_text = lines[i][7:].strip() if len(lines[i]) > 7 else ""
                         if next_text and not next_text.startswith(" ") and "(" not in next_text:
                             break
-                    sl = SIGNATURE_LINE.match(lines[i])
                     dl = DOC_LINE.match(lines[i])
-                    if sl and not sig_lines:
-                        sig_lines.append(sl.group(1))
-                    elif dl:
+                    if dl:
                         doc_lines.append(dl.group(1))
                     elif EMPTY_PIPE.match(lines[i]):
                         i += 1
@@ -195,7 +218,6 @@ def parse_pydoc(text: str):
                 if name in HIDDEN_METHODS or name == cls_name:
                     continue
 
-                signature = sig_lines[0] if sig_lines else f"{name}(...)"
                 doc = "\n".join(doc_lines).strip()
                 methods.append({"name": name, "signature": signature, "doc": doc})
                 continue
@@ -273,6 +295,10 @@ def parse_pydoc(text: str):
 def clean_signature(sig: str) -> str:
     """Replace internal module paths for readability."""
     sig = sig.replace("bytecaskdb._bytecaskdb.", "")
+    sig = sig.replace("_bc.", "")
+    # Remove self parameter
+    sig = re.sub(r"\(self, ", "(", sig)
+    sig = re.sub(r"\(self\)", "()", sig)
     return sig
 
 

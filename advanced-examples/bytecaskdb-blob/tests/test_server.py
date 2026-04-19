@@ -1,12 +1,16 @@
-"""Integration tests for the blob HTTP server using boto3."""
+"""Integration tests for the blob HTTP server using boto3.
 
+Exercises the synchronous WSGI server module (``bytecaskdb_blob.server``).
+The WSGI app is served via stdlib's ``wsgiref.simple_server`` so that
+Granian is not required to run the tests.
+"""
+
+import socket
 import tempfile
 import threading
-import time
 
 import boto3
 import pytest
-import uvicorn
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
@@ -15,38 +19,35 @@ from bytecaskdb_blob.server import create_app
 
 @pytest.fixture(scope="module")
 def server():
-    """Start the blob server in a background thread for the test module."""
+    """Start the WSGI blob server in a background thread."""
+    from socketserver import ThreadingMixIn
+    from wsgiref.simple_server import WSGIServer, WSGIRequestHandler, make_server
+
+    # Threaded server so keep-alive connections don't block new requests
+    class _ThreadedWSGIServer(ThreadingMixIn, WSGIServer):
+        daemon_threads = True
+
+    # Silence request logs during tests
+    class _QuietHandler(WSGIRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
     tmpdir = tempfile.mkdtemp()
     app = create_app(data_dir=tmpdir, chunk_size=256)
 
-    config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="error")
-    server = uvicorn.Server(config)
+    # Bind to a free port
+    httpd = make_server("127.0.0.1", 0, app,
+                        server_class=_ThreadedWSGIServer,
+                        handler_class=_QuietHandler)
+    port = httpd.server_address[1]
 
-    # Find a free port
-    import socket
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
-    server = uvicorn.Server(config)
-
-    thread = threading.Thread(target=server.run, daemon=True)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
-
-    # Wait for server to be ready
-    for _ in range(50):
-        try:
-            s = socket.create_connection(("127.0.0.1", port), timeout=0.1)
-            s.close()
-            break
-        except OSError:
-            time.sleep(0.1)
 
     yield f"http://127.0.0.1:{port}"
 
-    server.should_exit = True
+    httpd.shutdown()
+    app.close()
     thread.join(timeout=5)
 
 

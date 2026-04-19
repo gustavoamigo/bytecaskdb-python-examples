@@ -45,33 +45,28 @@ Open with DB.open(path) or DB.open(path, max_file_bytes=..., ...).
 
 | Property | Description |
 |----------|-------------|
-| `) -> None` | Delete all keys in [from_key, to_key) with a single disk append. |
-| `) -> bytes | None` | Return value for *key*, or *default* if not found. |
-| `) -> bool` | Run one vacuum pass. Return True if a file was vacuumed. Call in a loop to compact all eligible files::     while db.vacuum():         pass |
-| `Class methods defined here:` |  |
-| `) -> 'DB'` |  |
 | `degraded_reason` |  |
 | `is_degraded` |  |
 
 ### Methods
 
-#### `__contains__(...)`
+#### `__contains__(key: bytes) -> bool`
 
 Return True if *key* exists. No disk I/O.
 
-#### `__delitem__(...)`
+#### `__delitem__(key: bytes) -> None`
 
 Delete *key*. Silently succeeds if the key does not exist.
 
-#### `__getitem__(...)`
+#### `__getitem__(key: bytes) -> bytes`
 
 Return value for *key*; raises KeyError if not found.
 
-#### `__setitem__(...)`
+#### `__setitem__(key: bytes, value: bytes) -> None`
 
 Write key → value with default options (sync=True).
 
-#### `batch(...)`
+#### `batch(*, sync: bool = True, solo: bool = False) -> _BatchContext`
 
 Context manager for an atomic batch of writes/deletes.
 Changes are committed on ``__exit__``.  No conflict detection.
@@ -81,67 +76,58 @@ Example::
         del b[b"key2"]
         b.delete_range(b"log:001", b"log:010")
 
-#### `delete(...)`
+#### `delete(key: bytes, *, sync: bool = True, solo: bool = False) -> bool`
 
 Delete *key*. Returns True if the key existed.
 
-#### `delete_range(...)`
+#### `delete_range(from_key: bytes, to_key: bytes, *, sync: bool = True, solo: bool = False) -> None`
 
-self,
-from_key: bytes,
-to_key: bytes,
-*,
-sync: bool = True,
-solo: bool = False
+Delete all keys in [from_key, to_key) with a single disk append.
 
-#### `get(...)`
+#### `get(key: bytes, default: bytes | None = None, *, verify_checksums: bool = False) -> bytes | None`
 
-self,
-key: bytes,
-default: bytes | None = None,
-*,
-verify_checksums: bool = False
+Return value for *key*, or *default* if not found.
 
-#### `items(...)`
+#### `items(start: bytes = b'', *, verify_checksums: bool = False)`
 
 Iterate (key, value) pairs in ascending order from *start*.
 
-#### `keys(...)`
+#### `keys(start: bytes = b'', *, verify_checksums: bool = False)`
 
 Iterate keys in ascending order from *start*. No disk I/O.
 
-#### `prefix(...)`
+#### `prefix(pfx: bytes, *, verify_checksums: bool = False)`
 
 Iterate (key, value) pairs whose key starts with *pfx*,
 ascending.
 
-#### `put(...)`
+#### `put(key: bytes, value: bytes, *, sync: bool = True, solo: bool = False) -> None`
 
 Write key → value.
 
-#### `resume(...)`
+#### `resume() -> None`
 
 Attempt recovery from a degraded state.
 
-#### `ritems(...)`
+#### `ritems(start: bytes = b'', *, verify_checksums: bool = False)`
 
 Iterate (key, value) pairs in descending order from *start*.
 When *start* is b'' (default), begins at the last key.
 
-#### `rkeys(...)`
+#### `rkeys(start: bytes = b'', *, verify_checksums: bool = False)`
 
 Iterate keys in descending order from *start*. No disk I/O.
 
-#### `rprefix(...)`
+#### `rprefix(pfx: bytes, *, verify_checksums: bool = False)`
 
 Iterate (key, value) pairs whose key starts with *pfx*,
 descending.
 
-#### `snapshot(...)`
+#### `snapshot() -> Snapshot`
 
 Return a frozen read-only view of the database at this instant.
 
-#### `transaction(...)`
+#### `transaction(*, sync: bool = True, solo: bool = False) -> _TransactionContext`
 
 Context manager for a snapshot-backed transaction.
 Reads come from a snapshot taken at entry.  Writes are staged and
@@ -152,20 +138,14 @@ Example::
         stock = int(txn[b"stock"])
         txn[b"stock"] = str(stock - 1).encode()
 
-#### `vacuum(...)`
+#### `vacuum(*, fragmentation_threshold: float | None = None, absorb_threshold: int | None = None) -> bool`
 
-self,
-*,
-fragmentation_threshold: float | None = None,
-absorb_threshold: int | None = None
+Run one vacuum pass. Return True if a file was vacuumed.
+Call in a loop to compact all eligible files::
+    while db.vacuum():
+        pass
 
-#### `open(...)`
-
-path: str,
-*,
-max_file_bytes: int | None = None,
-recovery_threads: int | None = None,
-fail_recovery_on_crc_errors: bool | None = None
+#### `open(path: str, *, max_file_bytes: int | None = None, recovery_threads: int | None = None, fail_recovery_on_crc_errors: bool | None = None) -> 'DB'`
 
 ---
 
@@ -214,35 +194,35 @@ Use as a context manager to ensure resources are released promptly.
 
 ### Methods
 
-#### `__contains__(...)`
+#### `__contains__(key: bytes) -> bool`
 
-#### `__getitem__(...)`
+#### `__getitem__(key: bytes) -> bytes`
 
-#### `get(...)`
+#### `get(key: bytes, default: bytes | None = None) -> bytes | None`
 
-#### `items(...)`
+#### `items(start: bytes = b'')`
 
 Iterate (key, value) pairs in ascending order from *start*.
 
-#### `keys(...)`
+#### `keys(start: bytes = b'')`
 
 Iterate keys in ascending order from *start*. No disk I/O.
 
-#### `prefix(...)`
+#### `prefix(pfx: bytes)`
 
 Iterate (key, value) pairs whose key starts with *pfx*,
 ascending.
 
-#### `ritems(...)`
+#### `ritems(start: bytes = b'')`
 
 Iterate (key, value) pairs in descending order from *start*.
 When *start* is b'' (default), begins at the last key.
 
-#### `rkeys(...)`
+#### `rkeys(start: bytes = b'')`
 
 Iterate keys in descending order from *start*. No disk I/O.
 
-#### `rprefix(...)`
+#### `rprefix(pfx: bytes)`
 
 Iterate (key, value) pairs whose key starts with *pfx*,
 descending.

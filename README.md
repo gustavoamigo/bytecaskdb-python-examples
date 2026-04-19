@@ -58,6 +58,26 @@ No Windows support yet — hackers are welcome to change that!
 
 > **Note:** This is an early development version.
 
+## Basic Examples
+
+| Example | Description |
+|---------|-------------|
+| [start_here.py](start_here.py) | Basic ByteCaskDB usage: open, CRUD, batch, close |
+| [conditional_write.py](basic-examples/conditional_write.py) | Transactions with conflict detection: snapshot isolation, retry loops |
+| [del_range.py](basic-examples/del_range.py) | Range deletions: `delete_range` on DB and in a batch |
+| [ensure_guards.py](basic-examples/ensure_guards.py) | Transaction guards: `ensure_absent`, `ensure_present`, `ensure_range_unchanged` |
+| [error_handling.py](basic-examples/error_handling.py) | Error handling: degraded state, `DegradedError`, and `IoError` |
+| [iteration.py](basic-examples/iteration.py) | Iteration patterns: forward, reverse, prefix scan, keys-only |
+| [open_options.py](basic-examples/open_options.py) | Open options: file rotation, recovery threads, CRC policy |
+| [read_options.py](basic-examples/read_options.py) | ReadOptions: CRC verification on reads via `verify_checksums` |
+| [vacuum.py](basic-examples/vacuum.py) | Vacuum: reclaim disk space from deleted or overwritten entries |
+
+## Advanced Examples
+
+| Example | Description |
+|---------|-------------|
+| [bytecaskdb-blob](advanced-examples/bytecaskdb-blob) | Persistent blob storage engine with an S3-compatible HTTP API |
+
 ## API Documentation
 
 You can view the full API docs directly from Python using `help()`:

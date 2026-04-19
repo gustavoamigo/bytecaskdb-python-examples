@@ -15,6 +15,16 @@ A persistent blob storage engine built on [ByteCaskDB](https://github.com/gustav
 
 ## Quick Start
 
+### Prerequisites
+
+Free-threaded Python (e.g. `python3.14t`) is strongly recommended. The server
+uses [Granian](https://github.com/emmett-framework/granian) with WSGI, where
+each request runs synchronously in its own OS thread. With free-threaded Python
+there is no GIL, so the entire request pipeline — HTTP parsing in Granian's Rust
+layer, Python request handling, and ByteCaskDB I/O — runs in true parallelism
+across all threads. Without free-threading the GIL serialises the Python
+portions, eliminating most of the concurrency benefit.
+
 ### Install dependencies
 
 ```bash
@@ -149,10 +159,29 @@ go install github.com/minio/warp@latest
 # make sure ~/go/bin is in your PATH
 export PATH=$PATH:~/go/bin
 
-rclone mkdir local-blob:warp-test && warp mixed --host localhost:8080 --access-key dummy --secret-key dummy --bucket warp-test --concurrent 32 --duration 5s --tls=false
+curl -X PUT http://localhost:8080/warp-test && warp mixed --host localhost:8080 --access-key dummy --secret-key dummy --bucket warp-test --concurrent 32 --duration 60s --tls=false --noclear  && curl -X DELETE "http://localhost:8080/warp-test?force=true"
 ```
 
 warp writes result files (`*.csv.zst`) to the current directory — see `.gitignore`.
+
+### Benchmark results
+
+Tested on a single machine with Python 3.14t (free-threaded), Granian WSGI,
+32 concurrent connections, 60 s mixed workload (10 MiB objects):
+
+- **CPU:** AMD Ryzen 7 3700X 8-Core
+- **RAM:** 32 GiB
+- **Disk:** Samsung SSD 860 EVO 500 GB (SATA, ~485 MiB/s seq read, ~475 MiB/s seq write)
+
+| Operation | Throughput | Obj/s | Median latency |
+|-----------|-----------|-------|----------------|
+| GET       | 338.5 MiB/s | 33.85 | 217 ms |
+| PUT       | 108.5 MiB/s | 10.85 | 1282 ms |
+| DELETE    | — | 7.14 | 485 ms |
+| STAT      | — | 19.80 | 169 ms |
+| **Total** | **446.0 MiB/s** | **71.57** | — |
+
+Peak throughput reached 641.8 MiB/s (118.83 obj/s).
 
 ## Tests
 

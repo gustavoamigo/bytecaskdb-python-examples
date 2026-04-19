@@ -5,7 +5,6 @@ Key layout:
     blob:{bucket}/{path}:chunk:{nnnnn} -> raw bytes (5-digit zero-padded)
     bucket:{name}:meta                 -> JSON bucket metadata
     upload:{upload_id}:meta            -> JSON multipart upload metadata
-    upload:{upload_id}:part:{nnnnn}    -> staged multipart part bytes
 """
 
 from __future__ import annotations
@@ -81,14 +80,6 @@ def _bucket_meta_key(name: str) -> bytes:
 
 def _upload_meta_key(upload_id: str) -> bytes:
     return f"upload:{upload_id}:meta".encode()
-
-
-def _upload_part_key(upload_id: str, part_number: int) -> bytes:
-    return f"upload:{upload_id}:part:{part_number:05d}".encode()
-
-
-def _upload_prefix(upload_id: str) -> bytes:
-    return f"upload:{upload_id}:".encode()
 
 
 # ── Streaming upload context manager ─────────────────────────────────────────
