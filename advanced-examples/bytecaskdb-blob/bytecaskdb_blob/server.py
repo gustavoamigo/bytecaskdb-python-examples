@@ -7,8 +7,12 @@ responses, S3-style headers) are confined to this module.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
+import threading
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from urllib.parse import unquote
 
@@ -29,6 +33,20 @@ from .storage import (
 )
 
 __all__ = ["create_app"]
+
+
+# ── Thread pool helpers ─────────────────────────────────────────────────────
+
+async def _run_in_executor(request: Request, func, *args, **kwargs):
+    """Run a ByteCaskDB operation in the thread pool."""
+    executor: ThreadPoolExecutor = request.app.state.executor
+    loop = asyncio.get_event_loop()
+
+    # Create a wrapper function that handles the kwargs
+    def wrapper():
+        return func(*args, **kwargs)
+
+    return await loop.run_in_executor(executor, wrapper)
 
 
 # ── XML helpers ──────────────────────────────────────────────────────────────
@@ -95,7 +113,7 @@ def _maybe_decode_aws_chunked(request: Request, body: bytes) -> bytes:
 
 async def list_buckets(request: Request) -> Response:
     storage: BlobStorage = request.app.state.storage
-    buckets = storage.list_buckets()
+    buckets = await _run_in_executor(request, storage.list_buckets)
 
     root = ET.Element("ListAllMyBucketsResult")
     owner = ET.SubElement(root, "Owner")
@@ -114,12 +132,12 @@ async def handle_bucket(request: Request) -> Response:
     bucket = request.path_params["bucket"]
 
     if request.method == "PUT":
-        storage.create_bucket(bucket)
+        await _run_in_executor(request, storage.create_bucket, bucket)
         return Response(status_code=200)
 
     if request.method == "DELETE":
         try:
-            storage.delete_bucket(bucket)
+            await _run_in_executor(request, storage.delete_bucket, bucket)
         except BucketNotFoundError:
             return _error_xml("NoSuchBucket", f"Bucket not found: {bucket}", 404)
         except BucketNotEmptyError:
@@ -127,7 +145,8 @@ async def handle_bucket(request: Request) -> Response:
         return Response(status_code=204)
 
     if request.method == "HEAD":
-        if storage.bucket_exists(bucket):
+        exists = await _run_in_executor(request, storage.bucket_exists, bucket)
+        if exists:
             return Response(status_code=200)
         return _error_xml("NoSuchBucket", f"Bucket not found: {bucket}", 404)
 
@@ -165,7 +184,7 @@ async def handle_delete_objects(request: Request, storage: BlobStorage,
             continue
         key = key_el.text or ""
         try:
-            storage.delete_object(bucket, key)
+            await _run_in_executor(request, storage.delete_object, bucket, key)
             deleted.append(key)
             log.debug("deleted %s/%s", bucket, key)
         except Exception as exc:
@@ -192,8 +211,8 @@ async def list_objects(request: Request, storage: BlobStorage,
     if delimiter is None:
         delimiter = "/"
 
-    common_prefixes, contents = storage.list_objects(
-        bucket, prefix=prefix, delimiter=delimiter
+    common_prefixes, contents = await _run_in_executor(
+        request, storage.list_objects, bucket, prefix=prefix, delimiter=delimiter
     )
 
     root = ET.Element("ListBucketResult")
@@ -257,7 +276,8 @@ async def handle_put_object(request: Request, storage: BlobStorage,
         log.debug("PUT_PART %s/%s part=%s upload=%s body_size=%d",
                   bucket, key, part_number, upload_id, len(body))
         try:
-            etag = storage.upload_part(upload_id, int(part_number), body)
+            etag = await _run_in_executor(request, storage.upload_part,
+                                        upload_id, int(part_number), body)
         except UploadNotFoundError:
             return _error_xml("NoSuchUpload", "Upload not found", 404)
         return Response(status_code=200, headers={"ETag": f'"{etag}"'})
@@ -273,9 +293,9 @@ async def handle_put_object(request: Request, storage: BlobStorage,
             meta_key = h[len("x-amz-meta-"):]
             user_metadata[meta_key] = v
 
-    meta = storage.put_object(bucket, key, body,
-                              content_type=content_type,
-                              user_metadata=user_metadata)
+    meta = await _run_in_executor(request, storage.put_object, bucket, key, body,
+                                content_type=content_type,
+                                user_metadata=user_metadata)
     log.debug("PUT %s/%s body_size=%d stored_size=%d etag=%s",
               bucket, key, len(body), meta["size"], meta["etag"])
     return Response(status_code=200, headers={"ETag": f'"{meta["etag"]}"'})
@@ -284,7 +304,7 @@ async def handle_put_object(request: Request, storage: BlobStorage,
 async def handle_get_object(request: Request, storage: BlobStorage,
                             bucket: str, key: str) -> Response:
     try:
-        meta = storage.head_object(bucket, key)
+        meta = await _run_in_executor(request, storage.head_object, bucket, key)
     except BlobNotFoundError:
         return _error_xml("NoSuchKey", f"Object not found: {key}", 404)
 
@@ -313,14 +333,18 @@ async def handle_get_object(request: Request, storage: BlobStorage,
         end = int(parts[1]) if parts[1] else meta["size"] - 1
         end = min(end, meta["size"] - 1)
 
-        data = storage.get_range(bucket, key, start, end)
+        data = await _run_in_executor(request, storage.get_range, bucket, key, start, end)
         headers["Content-Length"] = str(len(data))
         headers["Content-Range"] = f"bytes {start}-{end}/{meta['size']}"
         return Response(data, status_code=206, headers=headers)
 
     # Full object — stream it
+    def sync_stream_object():
+        for chunk in storage.stream_object(bucket, key):
+            yield chunk
+
     return StreamingResponse(
-        storage.stream_object(bucket, key),
+        sync_stream_object(),
         status_code=200,
         headers=headers,
         media_type=meta["content_type"],
@@ -332,19 +356,19 @@ async def handle_delete_object(request: Request, storage: BlobStorage,
     upload_id = request.query_params.get("uploadId")
     if upload_id:
         try:
-            storage.abort_multipart_upload(upload_id)
+            await _run_in_executor(request, storage.abort_multipart_upload, upload_id)
         except UploadNotFoundError:
             return _error_xml("NoSuchUpload", "Upload not found", 404)
         return Response(status_code=204)
 
-    storage.delete_object(bucket, key)
+    await _run_in_executor(request, storage.delete_object, bucket, key)
     return Response(status_code=204)
 
 
 async def handle_head_object(request: Request, storage: BlobStorage,
                              bucket: str, key: str) -> Response:
     try:
-        meta = storage.head_object(bucket, key)
+        meta = await _run_in_executor(request, storage.head_object, bucket, key)
     except BlobNotFoundError:
         return Response(status_code=404)
 
@@ -370,7 +394,8 @@ async def handle_post_object(request: Request, storage: BlobStorage,
     # CreateMultipartUpload?
     if "uploads" in request.query_params:
         content_type = request.headers.get("content-type", "application/octet-stream")
-        upload_id = storage.create_multipart_upload(bucket, key, content_type)
+        upload_id = await _run_in_executor(request, storage.create_multipart_upload,
+                                         bucket, key, content_type)
 
         root = ET.Element("InitiateMultipartUploadResult")
         ET.SubElement(root, "Bucket").text = bucket
@@ -382,7 +407,7 @@ async def handle_post_object(request: Request, storage: BlobStorage,
     upload_id = request.query_params.get("uploadId")
     if upload_id:
         try:
-            meta = storage.complete_multipart_upload(upload_id)
+            meta = await _run_in_executor(request, storage.complete_multipart_upload, upload_id)
         except UploadNotFoundError:
             return _error_xml("NoSuchUpload", "Upload not found", 404)
         except BlobStorageError as e:
@@ -403,9 +428,39 @@ async def handle_post_object(request: Request, storage: BlobStorage,
 
 # ── App factory ──────────────────────────────────────────────────────────────
 
+def _vacuum_loop(storage: "BlobStorage", busy_interval: float, idle_interval: float, stop: threading.Event) -> None:
+    """Background thread: run vacuum passes until *stop* is set.
+
+    If vacuum() returns True (segment compacted, more may remain) sleep
+    *busy_interval* seconds before the next pass.  If it returns False
+    (nothing to do) sleep *idle_interval* seconds.
+    """
+    while not stop.is_set():
+        try:
+            log.info("vacuum: run log")
+            more_work = storage._db.vacuum()
+            log.info("vacuum: vacuum more_work=%s", more_work)
+            if more_work:
+                log.info("vacuum: compacted a segment")
+        except Exception:
+            log.exception("vacuum: error during pass")
+            more_work = False
+        stop.wait(timeout=busy_interval if more_work else idle_interval)
+
+
 def create_app(data_dir: str = "./blob_data",
-               chunk_size: int = 4 * 1024 * 1024) -> Starlette:
-    """Create the blob server ASGI application."""
+               chunk_size: int = 4 * 1024 * 1024,
+               vacuum_busy_interval: float = 1.0,
+               vacuum_idle_interval: float = 30.0) -> Starlette:
+    """Create the blob server ASGI application.
+
+    A background daemon thread runs vacuum passes continuously.
+    *vacuum_busy_interval* (default 1 s) is the pause between passes when
+    there is more work to do; *vacuum_interval* (default 30 s) is the pause
+    when the DB is fully compacted.
+    The DB is explicitly closed in the ASGI lifespan so nanobind does not
+    report leaked instances on shutdown.
+    """
 
     routes = [
         Route("/", list_buckets, methods=["GET"]),
@@ -417,6 +472,33 @@ def create_app(data_dir: str = "./blob_data",
               methods=["PUT", "GET", "DELETE", "HEAD", "POST"]),
     ]
 
-    app = Starlette(routes=routes)
-    app.state.storage = BlobStorage(data_dir, chunk_size=chunk_size)
-    return app
+    @contextlib.asynccontextmanager
+    async def lifespan(app: Starlette):
+        storage = BlobStorage(data_dir, chunk_size=chunk_size)
+        executor = ThreadPoolExecutor(max_workers=16, thread_name_prefix="bytecaskdb-")
+        app.state.storage = storage
+        app.state.executor = executor
+
+        stop_event = threading.Event()
+        t = threading.Thread(
+            target=_vacuum_loop,
+            args=(storage, vacuum_busy_interval, vacuum_idle_interval, stop_event),
+            name="bytecaskdb-vacuum",
+            daemon=True,
+        )
+        t.start()
+        log.debug("vacuum thread started (busy=%.1fs idle=%.0fs)",
+                  vacuum_busy_interval, vacuum_idle_interval)
+
+        try:
+            yield
+        finally:
+            stop_event.set()
+            t.join(timeout=5)
+            executor.shutdown(wait=False)
+            del app.state.storage
+            del app.state.executor
+            del storage
+            log.debug("storage closed")
+
+    return Starlette(routes=routes, lifespan=lifespan)

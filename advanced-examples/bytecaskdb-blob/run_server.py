@@ -3,6 +3,15 @@
 
 import argparse
 import logging
+import warnings
+
+# httptools has not yet declared free-threaded (no-GIL) safety.  Suppress the
+# RuntimeWarning that Python 3.13+ emits when it re-enables the GIL to load it.
+warnings.filterwarnings(
+    "ignore",
+    message=".*global interpreter lock.*",
+    category=RuntimeWarning,
+)
 
 import uvicorn
 
@@ -17,6 +26,10 @@ def main():
     parser.add_argument("--port", type=int, default=8080, help="Bind port")
     parser.add_argument("--chunk-size", type=int, default=4 * 1024 * 1024,
                         help="Chunk size in bytes (default: 4 MiB)")
+    parser.add_argument("--vacuum-idle-interval", type=float, default=30.0,
+                        help="Seconds between vacuum passes when idle (default: 30)")
+    parser.add_argument("--vacuum-busy-interval", type=float, default=1.0,
+                        help="Seconds between vacuum passes when work remains (default: 1)")
     parser.add_argument("--log-level", default="error",
                         choices=["critical", "error", "warning", "info", "debug", "trace"],
                         help="Uvicorn log level (default: error)")
@@ -36,8 +49,10 @@ def main():
 
     _blob_log.debug("bytecaskdb_blob debug logging active (level=%s)", args.log_level)
 
-    app = create_app(data_dir=args.data_dir, chunk_size=args.chunk_size)
-    uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
+    app = create_app(data_dir=args.data_dir, chunk_size=args.chunk_size,
+                     vacuum_busy_interval=args.vacuum_busy_interval,
+                     vacuum_idle_interval=args.vacuum_idle_interval)
+    uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level, http="h11")
 
 
 if __name__ == "__main__":
