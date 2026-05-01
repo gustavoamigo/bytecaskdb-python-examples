@@ -7,6 +7,7 @@ calling ByteCaskDB directly without async overhead or executor wrappers.
 """
 
 import argparse
+import asyncio
 import logging
 import sys
 import warnings
@@ -41,7 +42,7 @@ def main():
                         help="Max concurrent requests per worker (default: auto)")
     parser.add_argument("--vacuum-idle-interval", type=float, default=30.0,
                         help="Seconds between vacuum passes when idle (default: 30)")
-    parser.add_argument("--vacuum-busy-interval", type=float, default=1.0,
+    parser.add_argument("--vacuum-busy-interval", type=float, default=0.3,
                         help="Seconds between vacuum passes when work remains (default: 1)")
     parser.add_argument("--log-level", default="info",
                         choices=["critical", "error", "warning", "info", "debug"],
@@ -58,6 +59,15 @@ def main():
     _blob_log.propagate = False
 
     _blob_log.debug("bytecaskdb_blob debug logging active (level=%s)", args.log_level)
+
+    gil_checker = getattr(sys, "_is_gil_enabled", None)
+    gil_enabled = gil_checker() if callable(gil_checker) else None
+    free_threaded_build = "free-threading build" in sys.version.lower()
+    _blob_log.info(
+        "python runtime: free_threaded_build=%s gil_enabled=%s",
+        free_threaded_build,
+        "unknown" if gil_enabled is None else gil_enabled,
+    )
 
     app = create_app(data_dir=args.data_dir, chunk_size=args.chunk_size,
                      vacuum_busy_interval=args.vacuum_busy_interval,
@@ -82,6 +92,20 @@ def main():
 
     _blob_log.info("starting Granian WSGI server on %s:%d (workers=%d)",
                    args.host, args.port, args.workers)
+
+    # Granian's Rust core creates an asyncio event loop internally. On
+    # shutdown the GC calls BaseEventLoop.__del__ after FDs are already
+    # closed, producing a noisy ValueError traceback. Suppress it.
+    _orig_del = asyncio.BaseEventLoop.__del__
+
+    def _quiet_del(self):
+        try:
+            _orig_del(self)
+        except (ValueError, OSError):
+            pass
+
+    asyncio.BaseEventLoop.__del__ = _quiet_del
+
     server.serve(target_loader=lambda: app, wrap_loader=False)
 
 

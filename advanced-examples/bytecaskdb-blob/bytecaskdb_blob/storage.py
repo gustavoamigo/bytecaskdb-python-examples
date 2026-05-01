@@ -19,7 +19,7 @@ import bytecaskdb as bc
 
 __all__ = ["BlobStorage", "BlobNotFoundError", "BucketNotFoundError", "BucketNotEmptyError", "UploadNotFoundError", "UploadInProgressError"]
 
-DEFAULT_CHUNK_SIZE = 4 * 1024 * 1024  # 4 MiB
+DEFAULT_CHUNK_SIZE = 1 * 1024 * 1024  # 1 MiB
 
 
 # ── Exceptions ───────────────────────────────────────────────────────────────
@@ -189,20 +189,25 @@ class BlobStorage:
                    content_type: str = "application/octet-stream",
                    user_metadata: dict | None = None) -> dict:
         """Upload an object in one shot. Returns metadata dict."""
-        chunks = []
-        offset = 0
-        while offset < len(data):
-            chunks.append(data[offset:offset + self.chunk_size])
-            offset += self.chunk_size
-        if not chunks:
-            chunks = [b""]
-
         etag = _md5(data)
+        chunk_count = 0
+
+        if not data:
+            self._db[_chunk_key(bucket, path, 0)] = b""
+            chunk_count = 1
+        else:
+            offset = 0
+            while offset < len(data):
+                chunk = data[offset:offset + self.chunk_size]
+                self._db[_chunk_key(bucket, path, chunk_count)] = chunk
+                chunk_count += 1
+                offset += self.chunk_size
+
         now = time.time()
         meta = {
             "size": len(data),
             "content_type": content_type,
-            "chunk_count": len(chunks),
+            "chunk_count": chunk_count,
             "chunk_size": self.chunk_size,
             "status": "uploading",
             "etag": etag,
@@ -211,9 +216,54 @@ class BlobStorage:
             "user_metadata": user_metadata or {},
         }
 
-        # Write chunks first (outside transaction to avoid memory accumulation)
-        for i, chunk in enumerate(chunks):
-            self._db[_chunk_key(bucket, path, i)] = chunk
+        # Atomically flip to complete
+        meta["status"] = "complete"
+        self._db[_meta_key(bucket, path)] = _serialize(meta)
+
+        return meta
+
+    def put_object_stream(self, bucket: str, path: str, stream,
+                          total_size: int,
+                          content_type: str = "application/octet-stream",
+                          user_metadata: dict | None = None) -> dict:
+        """Upload an object from a stream without buffering the full body in memory."""
+        md5 = hashlib.md5()
+        chunk_count = 0
+        bytes_read = 0
+
+        if total_size == 0:
+            self._db[_chunk_key(bucket, path, 0)] = b""
+            chunk_count = 1
+        else:
+            while bytes_read < total_size:
+                to_read = min(self.chunk_size, total_size - bytes_read)
+                chunk = stream.read(to_read)
+                if not chunk:
+                    break
+
+                self._db[_chunk_key(bucket, path, chunk_count)] = chunk
+                chunk_count += 1
+                bytes_read += len(chunk)
+                md5.update(chunk)
+
+            if bytes_read != total_size:
+                raise BlobStorageError(
+                    f"Incomplete request body for {bucket}/{path}: "
+                    f"read {bytes_read}, expected {total_size}"
+                )
+
+        now = time.time()
+        meta = {
+            "size": total_size,
+            "content_type": content_type,
+            "chunk_count": chunk_count,
+            "chunk_size": self.chunk_size,
+            "status": "uploading",
+            "etag": md5.hexdigest(),
+            "created_at": now,
+            "completed_at": now,
+            "user_metadata": user_metadata or {},
+        }
 
         # Atomically flip to complete
         meta["status"] = "complete"

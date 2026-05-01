@@ -1,5 +1,6 @@
 """Tests for the BlobStorage engine (no HTTP)."""
 
+from io import BytesIO
 import tempfile
 import pytest
 from bytecaskdb_blob import (
@@ -137,6 +138,13 @@ class TestStreaming:
             up.write(b"b" * 100)
         result = storage.get_object("b", "streamed.bin")
         assert result == b"a" * 100 + b"b" * 100
+
+    def test_put_object_stream(self, storage):
+        storage.create_bucket("b")
+        data = b"z" * 200
+        meta = storage.put_object_stream("b", "stream.bin", BytesIO(data), len(data))
+        assert meta["chunk_count"] == 4
+        assert storage.get_object("b", "stream.bin") == data
 
 
 # ── Range requests ───────────────────────────────────────────────────────────

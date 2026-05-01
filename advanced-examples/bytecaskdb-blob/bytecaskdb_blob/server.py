@@ -299,9 +299,20 @@ def _handle_put_object(storage: BlobStorage, environ, start_response, bucket: st
         start_response("200 OK", [("ETag", f'"{etag}"'), ("Content-Length", "0")])
         return [b""]
 
-    body = _maybe_decode_aws_chunked(environ, _read_body(environ))
     headers = _get_headers(environ)
     content_type = headers.get("content-type", "application/octet-stream")
+
+    is_aws_chunked = bool(
+        headers.get("x-amz-decoded-content-length")
+        or "aws-chunked" in headers.get("content-encoding", "")
+        or "STREAMING-" in headers.get("x-amz-content-sha256", "")
+    )
+
+    content_length: int | None
+    try:
+        content_length = int(environ.get("CONTENT_LENGTH", "") or "0")
+    except ValueError:
+        content_length = None
 
     user_metadata = {}
     for h, v in headers.items():
@@ -309,11 +320,25 @@ def _handle_put_object(storage: BlobStorage, environ, start_response, bucket: st
             meta_key = h[len("x-amz-meta-"):]
             user_metadata[meta_key] = v
 
-    meta = storage.put_object(bucket, key, body,
-                              content_type=content_type,
-                              user_metadata=user_metadata)
-    log.debug("PUT %s/%s body_size=%d stored_size=%d etag=%s",
-              bucket, key, len(body), meta["size"], meta["etag"])
+    if not is_aws_chunked and content_length is not None:
+        meta = storage.put_object_stream(
+            bucket,
+            key,
+            environ["wsgi.input"],
+            content_length,
+            content_type=content_type,
+            user_metadata=user_metadata,
+        )
+        log.debug("PUT(stream) %s/%s body_size=%d stored_size=%d etag=%s",
+                  bucket, key, content_length, meta["size"], meta["etag"])
+    else:
+        body = _maybe_decode_aws_chunked(environ, _read_body(environ))
+        meta = storage.put_object(bucket, key, body,
+                                  content_type=content_type,
+                                  user_metadata=user_metadata)
+        log.debug("PUT(buffered) %s/%s body_size=%d stored_size=%d etag=%s",
+                  bucket, key, len(body), meta["size"], meta["etag"])
+
     start_response("200 OK", [("ETag", f'"{meta["etag"]}"'), ("Content-Length", "0")])
     return [b""]
 
