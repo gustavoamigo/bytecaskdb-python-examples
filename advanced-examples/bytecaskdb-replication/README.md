@@ -19,7 +19,7 @@ against either node.
 ```
 
 **Replication flow:**
-1. Follower long-polls leader's `/replication/sequence` endpoint
+1. Follower polls the leader's `/replication/sequence` endpoint
 2. When new data is available, fetches entries via `/replication/changes?from_seq=N`
 3. Entries are serialized as NDJSON (base64-encoded keys/values)
 4. Follower reconstructs `DataEntry` objects and calls `db.ingest()`
@@ -86,7 +86,7 @@ curl http://localhost:8101/replication/status
 
 | Primitive | Role | Purpose |
 |-----------|------|---------|
-| `current_sequence(timeout_ms)` | Leader | Long-poll: block until new durable data |
+| `durable_sequence()` | Leader | Return the latest durable sequence |
 | `snapshot()` | Leader | Capture consistent read boundary |
 | `changes_since(snap, from_seq)` | Leader | Stream entries since follower's position |
 | `create_manifest()` | Leader | Bootstrap: rotate + return sealed files |

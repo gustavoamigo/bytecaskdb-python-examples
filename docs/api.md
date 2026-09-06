@@ -9,6 +9,7 @@
 ## Contents
 
 - [ByteCaskError](#bytecaskerror)
+- [CommitResult](#commitresult)
 - [ConflictError](#conflicterror)
 - [DB](#db)
 - [DbDegraded](#dbdegraded)
@@ -26,6 +27,19 @@
 ## ByteCaskError
 
 Base for all bytecaskdb_ext errors.
+
+---
+
+## CommitResult
+
+Outcome of a committed write. sequence is the highest sequence assigned to the write (0 = nothing written); durable is True iff fdatasync confirmed it before return. Read-only.
+
+### Properties
+
+| Property | Description |
+|----------|-------------|
+| `durable` | True if fdatasync confirmed durability before return. |
+| `sequence` | Highest sequence assigned to this write. 0 = nothing written. |
 
 ---
 
@@ -50,23 +64,23 @@ Open with DB.open(path) or DB.open(path, max_file_bytes=..., ...).
 
 ### Methods
 
-#### `__contains__(key: bytes) -> bool`
+#### `__contains__(key: 'bytes') -> 'bool'`
 
 Return True if *key* exists. No disk I/O.
 
-#### `__delitem__(key: bytes) -> None`
+#### `__delitem__(key: 'bytes') -> 'None'`
 
 Delete *key*. Silently succeeds if the key does not exist.
 
-#### `__getitem__(key: bytes) -> bytes`
+#### `__getitem__(key: 'bytes') -> 'bytes'`
 
 Return value for *key*; raises KeyError if not found.
 
-#### `__setitem__(key: bytes, value: bytes) -> None`
+#### `__setitem__(key: 'bytes', value: 'bytes') -> 'None'`
 
 Write key → value with default options (sync=True).
 
-#### `batch(*, sync: bool = True, solo: bool = False) -> _BatchContext`
+#### `batch(*, sync: 'bool' = True, solo: 'bool' = False) -> '_BatchContext'`
 
 Context manager for an atomic batch of writes/deletes.
 Changes are committed on ``__exit__``.  No conflict detection.
@@ -76,58 +90,59 @@ Example::
         del b[b"key2"]
         b.delete_range(b"log:001", b"log:010")
 
-#### `delete(key: bytes, *, sync: bool = True, solo: bool = False) -> bool`
+#### `delete(key: 'bytes', *, sync: 'bool' = True, solo: 'bool' = False) -> 'CommitResult | None'`
 
-Delete *key*. Returns True if the key existed.
+Delete *key*. Returns the CommitResult, or None if absent.
 
-#### `delete_range(from_key: bytes, to_key: bytes, *, sync: bool = True, solo: bool = False) -> None`
+#### `delete_range(from_key: 'bytes', to_key: 'bytes', *, sync: 'bool' = True, solo: 'bool' = False) -> 'CommitResult'`
 
 Delete all keys in [from_key, to_key) with a single disk append.
+Returns the assigned CommitResult.
 
-#### `get(key: bytes, default: bytes | None = None, *, verify_checksums: bool = False) -> bytes | None`
+#### `get(key: 'bytes', default: 'bytes | None' = None, *, verify_checksums: 'bool' = False) -> 'bytes | None'`
 
 Return value for *key*, or *default* if not found.
 
-#### `items(start: bytes = b'', *, verify_checksums: bool = False)`
+#### `items(start: 'bytes' = b'', *, verify_checksums: 'bool' = False)`
 
 Iterate (key, value) pairs in ascending order from *start*.
 
-#### `keys(start: bytes = b'', *, verify_checksums: bool = False)`
+#### `keys(start: 'bytes' = b'', *, verify_checksums: 'bool' = False)`
 
 Iterate keys in ascending order from *start*. No disk I/O.
 
-#### `prefix(pfx: bytes, *, verify_checksums: bool = False)`
+#### `prefix(pfx: 'bytes', *, verify_checksums: 'bool' = False)`
 
 Iterate (key, value) pairs whose key starts with *pfx*,
 ascending.
 
-#### `put(key: bytes, value: bytes, *, sync: bool = True, solo: bool = False) -> None`
+#### `put(key: 'bytes', value: 'bytes', *, sync: 'bool' = True, solo: 'bool' = False) -> 'CommitResult'`
 
-Write key → value.
+Write key → value. Returns the assigned CommitResult.
 
-#### `resume() -> None`
+#### `resume() -> 'None'`
 
 Attempt recovery from a degraded state.
 
-#### `ritems(start: bytes = b'', *, verify_checksums: bool = False)`
+#### `ritems(start: 'bytes' = b'', *, verify_checksums: 'bool' = False)`
 
 Iterate (key, value) pairs in descending order from *start*.
 When *start* is b'' (default), begins at the last key.
 
-#### `rkeys(start: bytes = b'', *, verify_checksums: bool = False)`
+#### `rkeys(start: 'bytes' = b'', *, verify_checksums: 'bool' = False)`
 
 Iterate keys in descending order from *start*. No disk I/O.
 
-#### `rprefix(pfx: bytes, *, verify_checksums: bool = False)`
+#### `rprefix(pfx: 'bytes', *, verify_checksums: 'bool' = False)`
 
 Iterate (key, value) pairs whose key starts with *pfx*,
 descending.
 
-#### `snapshot() -> Snapshot`
+#### `snapshot() -> 'Snapshot'`
 
 Return a frozen read-only view of the database at this instant.
 
-#### `transaction(*, sync: bool = True, solo: bool = False) -> _TransactionContext`
+#### `transaction(*, sync: 'bool' = True, solo: 'bool' = False) -> '_TransactionContext'`
 
 Context manager for a snapshot-backed transaction.
 Reads come from a snapshot taken at entry.  Writes are staged and
@@ -138,14 +153,14 @@ Example::
         stock = int(txn[b"stock"])
         txn[b"stock"] = str(stock - 1).encode()
 
-#### `vacuum(*, fragmentation_threshold: float | None = None, absorb_threshold: int | None = None) -> bool`
+#### `vacuum(*, fragmentation_threshold: 'float | None' = None) -> 'bool'`
 
 Run one vacuum pass. Return True if a file was vacuumed.
 Call in a loop to compact all eligible files::
     while db.vacuum():
         pass
 
-#### `open(path: str, *, max_file_bytes: int | None = None, recovery_threads: int | None = None, fail_recovery_on_crc_errors: bool | None = None) -> 'DB'`
+#### `open(path: 'str', *, max_file_bytes: 'int | None' = None, recovery_threads: 'int | None' = None, fail_recovery_on_crc_errors: 'bool | None' = None) -> "'DB'"`
 
 ---
 
@@ -168,7 +183,10 @@ Configuration for DB.open().
 | Property | Description |
 |----------|-------------|
 | `fail_recovery_on_crc_errors` | If True (default), CRC errors during recovery raise. |
+| `initial_mode` | Initial engine mode (default Mode.Leader). |
 | `max_file_bytes` | Active file rotation threshold in bytes (default 64 MiB). |
+| `max_key_bytes` | Max key size in bytes (default 4096; hard ceiling 65535). |
+| `max_value_bytes` | Max value size in bytes (default 4 MiB; hard ceiling ~4 GiB). |
 | `recovery_threads` | Number of threads for parallel hint-file replay (default 4). |
 
 ---
@@ -181,7 +199,7 @@ Per-read options for get, iter_from, etc.
 
 | Property | Description |
 |----------|-------------|
-| `verify_checksums` | If True, CRC-verify each value read from disk (default False). |
+| `verify_checksums` | If True (default), CRC-verify each value read from disk. |
 
 ---
 
@@ -194,35 +212,35 @@ Use as a context manager to ensure resources are released promptly.
 
 ### Methods
 
-#### `__contains__(key: bytes) -> bool`
+#### `__contains__(key: 'bytes') -> 'bool'`
 
-#### `__getitem__(key: bytes) -> bytes`
+#### `__getitem__(key: 'bytes') -> 'bytes'`
 
-#### `get(key: bytes, default: bytes | None = None) -> bytes | None`
+#### `get(key: 'bytes', default: 'bytes | None' = None) -> 'bytes | None'`
 
-#### `items(start: bytes = b'')`
+#### `items(start: 'bytes' = b'')`
 
 Iterate (key, value) pairs in ascending order from *start*.
 
-#### `keys(start: bytes = b'')`
+#### `keys(start: 'bytes' = b'')`
 
 Iterate keys in ascending order from *start*. No disk I/O.
 
-#### `prefix(pfx: bytes)`
+#### `prefix(pfx: 'bytes')`
 
 Iterate (key, value) pairs whose key starts with *pfx*,
 ascending.
 
-#### `ritems(start: bytes = b'')`
+#### `ritems(start: 'bytes' = b'')`
 
 Iterate (key, value) pairs in descending order from *start*.
 When *start* is b'' (default), begins at the last key.
 
-#### `rkeys(start: bytes = b'')`
+#### `rkeys(start: 'bytes' = b'')`
 
 Iterate keys in descending order from *start*. No disk I/O.
 
-#### `rprefix(pfx: bytes)`
+#### `rprefix(pfx: 'bytes')`
 
 Iterate (key, value) pairs whose key starts with *pfx*,
 descending.
@@ -237,7 +255,6 @@ Options for DB.vacuum().
 
 | Property | Description |
 |----------|-------------|
-| `absorb_threshold` | Max live bytes for absorption into active file (default 1 MiB). |
 | `fragmentation_threshold` | Minimum fragmentation ratio for a file to be eligible. |
 
 ---

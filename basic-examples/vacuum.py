@@ -33,12 +33,12 @@ def main():
             passes += 1
         print(f"  Additional passes: {passes}")
 
-        # --- Vacuum with custom options ---
-        print("\n=== Vacuum (custom options) ===")
+        # --- Vacuum with a custom fragmentation threshold ---
+        print("\n=== Vacuum (custom threshold) ===")
         passes = 0
-        while db.vacuum(fragmentation_threshold=0.1, absorb_threshold=1024 * 1024):
+        while db.vacuum(fragmentation_threshold=0.1):
             passes += 1
-        print(f"  Passes with low threshold: {passes}")
+        print(f"  Passes with low fragmentation threshold: {passes}")
 
         # Verify data is still intact.
         print("\n=== Verify data after vacuum ===")

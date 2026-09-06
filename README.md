@@ -18,8 +18,8 @@ Expected output:
 
 ```
 get(user:1) = b'alice'
-contains_key(user:2) = True
-del_(user:3) existed = True
+'user:2' in db = True
+del db[b'user:3']
 get(user:3) after delete = None
 
 After batch:

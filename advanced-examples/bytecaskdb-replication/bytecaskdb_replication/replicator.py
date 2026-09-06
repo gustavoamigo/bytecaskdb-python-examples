@@ -62,7 +62,7 @@ class ReplicationLeader:
         self._db = db
 
     def get_sequence(self, timeout_ms: int = 0) -> dict:
-        seq = self._db.current_sequence(timeout_ms)
+        seq = self._db.durable_sequence()
         return {"sequence": seq}
 
     def get_changes(self, from_seq: int = 0) -> bytes:
@@ -76,7 +76,7 @@ class ReplicationLeader:
     def get_status(self) -> dict:
         return {
             "role": "leader",
-            "sequence": self._db.current_sequence(0),
+            "sequence": self._db.durable_sequence(),
             "mode": self._db.mode.name,
         }
 
@@ -138,7 +138,7 @@ class ReplicationFollower:
 
     @property
     def follower_sequence(self) -> int:
-        return self._db.current_sequence(0)
+        return self._db.durable_sequence()
 
     @property
     def lag(self) -> int:
@@ -231,7 +231,7 @@ class ReplicationFollower:
             resp.raise_for_status()
             self._leader_seq = resp.json()["sequence"]
 
-            local_seq = self._db.current_sequence(0)
+            local_seq = self._db.durable_sequence()
             if local_seq >= self._leader_seq:
                 return
 
