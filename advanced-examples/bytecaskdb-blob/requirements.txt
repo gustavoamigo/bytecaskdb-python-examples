@@ -1,6 +1,7 @@
 --extra-index-url https://gustavoamigo.github.io/bytecaskdb/python/latest/
 bytecaskdb
 granian
+falcon
 httpx
 boto3
 pytest

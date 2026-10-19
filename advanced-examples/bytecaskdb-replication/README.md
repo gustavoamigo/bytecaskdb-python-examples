@@ -21,8 +21,8 @@ against either node.
 **Replication flow:**
 1. Follower polls the leader's `/replication/sequence` endpoint
 2. When new data is available, fetches entries via `/replication/changes?from_seq=N`
-3. Entries are serialized as NDJSON (base64-encoded keys/values)
-4. Follower reconstructs `DataEntry` objects and calls `db.ingest()`
+3. The `ChangeHeader` and entries are serialized as NDJSON (base64-encoded keys/values)
+4. Follower reconstructs the header and `DataEntry` objects and calls `db.ingest(header, entries)`
 5. Reads are served locally from the follower's replicated state
 
 ## Requirements
@@ -37,6 +37,8 @@ pip install -r requirements.txt
 ```
 
 ## Usage
+
+The database is opened with the `BufferPool` I/O backend (256 MiB, filled with `O_DIRECT`); see `open_db()` in `run_server.py`.
 
 ### Start the leader
 
@@ -90,7 +92,7 @@ curl http://localhost:8101/replication/status
 | `snapshot()` | Leader | Capture consistent read boundary |
 | `changes_since(snap, from_seq)` | Leader | Stream entries since follower's position |
 | `create_manifest()` | Leader | Bootstrap: rotate + return sealed files |
-| `ingest(entries)` | Follower | Apply leader's entries preserving sequences |
+| `ingest(header, entries)` | Follower | Apply a leader slice preserving sequences |
 | `Mode.Follower` | Follower | Block direct writes, allow only ingest |
 
 ## Key Design Decisions

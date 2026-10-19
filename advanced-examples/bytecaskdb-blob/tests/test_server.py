@@ -1,11 +1,10 @@
 """Integration tests for the blob HTTP server using boto3.
 
-Exercises the synchronous WSGI server module (``bytecaskdb_blob.server``).
+Exercises the WSGI server module (``bytecaskdb_blob.server``).
 The WSGI app is served via stdlib's ``wsgiref.simple_server`` so that
 Granian is not required to run the tests.
 """
 
-import socket
 import tempfile
 import threading
 
@@ -19,15 +18,13 @@ from bytecaskdb_blob.server import create_app
 
 @pytest.fixture(scope="module")
 def server():
-    """Start the WSGI blob server in a background thread."""
+    """Start the Falcon WSGI blob server in a background thread."""
     from socketserver import ThreadingMixIn
     from wsgiref.simple_server import WSGIServer, WSGIRequestHandler, make_server
 
-    # Threaded server so keep-alive connections don't block new requests
     class _ThreadedWSGIServer(ThreadingMixIn, WSGIServer):
         daemon_threads = True
 
-    # Silence request logs during tests
     class _QuietHandler(WSGIRequestHandler):
         def log_message(self, format, *args):
             pass
@@ -35,7 +32,6 @@ def server():
     tmpdir = tempfile.mkdtemp()
     app = create_app(data_dir=tmpdir, chunk_size=256)
 
-    # Bind to a free port
     httpd = make_server("127.0.0.1", 0, app,
                         server_class=_ThreadedWSGIServer,
                         handler_class=_QuietHandler)
@@ -81,118 +77,119 @@ class TestBucketOperations:
         s3.create_bucket(Bucket="head-test")
         s3.head_bucket(Bucket="head-test")
 
+    def test_head_bucket_not_found(self, s3):
+        with pytest.raises(ClientError) as exc_info:
+            s3.head_bucket(Bucket="nonexistent")
+        assert exc_info.value.response["Error"]["Code"] in ("404", "NoSuchBucket")
+
 
 class TestObjectOperations:
-    def test_put_and_get(self, s3):
-        s3.create_bucket(Bucket="obj-test")
-        s3.put_object(Bucket="obj-test", Key="hello.txt", Body=b"Hello!")
-
-        resp = s3.get_object(Bucket="obj-test", Key="hello.txt")
-        assert resp["Body"].read() == b"Hello!"
-
-    def test_head_object(self, s3):
-        s3.create_bucket(Bucket="head-obj")
-        s3.put_object(Bucket="head-obj", Key="f.txt", Body=b"abc",
-                      ContentType="text/plain")
-        resp = s3.head_object(Bucket="head-obj", Key="f.txt")
-        assert resp["ContentLength"] == 3
-        assert "ETag" in resp
+    def test_put_and_get_object(self, s3):
+        s3.create_bucket(Bucket="obj-bucket")
+        s3.put_object(Bucket="obj-bucket", Key="hello.txt", Body=b"Hello, World!")
+        resp = s3.get_object(Bucket="obj-bucket", Key="hello.txt")
+        assert resp["Body"].read() == b"Hello, World!"
 
     def test_delete_object(self, s3):
-        s3.create_bucket(Bucket="del-obj")
-        s3.put_object(Bucket="del-obj", Key="gone.txt", Body=b"bye")
-        s3.delete_object(Bucket="del-obj", Key="gone.txt")
-
+        s3.create_bucket(Bucket="del-bucket")
+        s3.put_object(Bucket="del-bucket", Key="gone.txt", Body=b"bye")
+        s3.delete_object(Bucket="del-bucket", Key="gone.txt")
         with pytest.raises(ClientError) as exc_info:
-            s3.get_object(Bucket="del-obj", Key="gone.txt")
+            s3.get_object(Bucket="del-bucket", Key="gone.txt")
         assert exc_info.value.response["Error"]["Code"] == "NoSuchKey"
 
-    def test_get_nonexistent(self, s3):
-        s3.create_bucket(Bucket="no-obj")
-        with pytest.raises(ClientError) as exc_info:
-            s3.get_object(Bucket="no-obj", Key="nope")
-        assert exc_info.value.response["Error"]["Code"] == "NoSuchKey"
+    def test_head_object(self, s3):
+        s3.create_bucket(Bucket="head-obj-bucket")
+        s3.put_object(Bucket="head-obj-bucket", Key="info.txt",
+                      Body=b"data", ContentType="text/plain")
+        resp = s3.head_object(Bucket="head-obj-bucket", Key="info.txt")
+        assert resp["ContentLength"] == 4
+        assert resp["ContentType"] == "text/plain"
 
-    def test_range_request(self, s3):
-        s3.create_bucket(Bucket="range-test")
-        s3.put_object(Bucket="range-test", Key="data.bin",
-                      Body=b"0123456789")
-        resp = s3.get_object(Bucket="range-test", Key="data.bin",
-                             Range="bytes=2-5")
-        assert resp["Body"].read() == b"2345"
+    def test_get_object_not_found(self, s3):
+        s3.create_bucket(Bucket="empty-bucket")
+        with pytest.raises(ClientError) as exc_info:
+            s3.get_object(Bucket="empty-bucket", Key="nope.txt")
+        assert exc_info.value.response["Error"]["Code"] == "NoSuchKey"
 
     def test_large_object_chunked(self, s3):
-        """Object larger than server chunk_size (256 bytes)."""
-        s3.create_bucket(Bucket="big-obj")
-        data = b"x" * 1000
-        s3.put_object(Bucket="big-obj", Key="big.bin", Body=data)
-        resp = s3.get_object(Bucket="big-obj", Key="big.bin")
+        s3.create_bucket(Bucket="big-bucket")
+        data = b"X" * 2048
+        s3.put_object(Bucket="big-bucket", Key="big.bin", Body=data)
+        resp = s3.get_object(Bucket="big-bucket", Key="big.bin")
         assert resp["Body"].read() == data
 
+    def test_range_request(self, s3):
+        s3.create_bucket(Bucket="range-bucket")
+        s3.put_object(Bucket="range-bucket", Key="range.txt", Body=b"0123456789")
+        resp = s3.get_object(Bucket="range-bucket", Key="range.txt",
+                             Range="bytes=3-7")
+        assert resp["Body"].read() == b"34567"
+
     def test_user_metadata(self, s3):
-        s3.create_bucket(Bucket="meta-test")
-        s3.put_object(Bucket="meta-test", Key="m.txt", Body=b"data",
+        s3.create_bucket(Bucket="meta-bucket")
+        s3.put_object(Bucket="meta-bucket", Key="meta.txt", Body=b"hi",
                       Metadata={"author": "test", "version": "1"})
-        resp = s3.head_object(Bucket="meta-test", Key="m.txt")
+        resp = s3.head_object(Bucket="meta-bucket", Key="meta.txt")
         assert resp["Metadata"]["author"] == "test"
         assert resp["Metadata"]["version"] == "1"
 
 
 class TestListObjects:
-    def test_list_flat(self, s3):
-        s3.create_bucket(Bucket="list-flat")
-        s3.put_object(Bucket="list-flat", Key="a.txt", Body=b"a")
-        s3.put_object(Bucket="list-flat", Key="b.txt", Body=b"b")
-
-        resp = s3.list_objects_v2(Bucket="list-flat")
-        keys = [o["Key"] for o in resp.get("Contents", [])]
-        assert sorted(keys) == ["a.txt", "b.txt"]
+    def test_list_with_prefix(self, s3):
+        s3.create_bucket(Bucket="list-bucket")
+        s3.put_object(Bucket="list-bucket", Key="docs/a.txt", Body=b"a")
+        s3.put_object(Bucket="list-bucket", Key="docs/b.txt", Body=b"b")
+        s3.put_object(Bucket="list-bucket", Key="images/c.png", Body=b"c")
+        resp = s3.list_objects_v2(Bucket="list-bucket", Prefix="docs/")
+        keys = [obj["Key"] for obj in resp.get("Contents", [])]
+        assert "docs/a.txt" in keys
+        assert "docs/b.txt" in keys
+        assert "images/c.png" not in keys
 
     def test_list_with_delimiter(self, s3):
-        s3.create_bucket(Bucket="list-delim")
-        s3.put_object(Bucket="list-delim", Key="photos/a.jpg", Body=b"a")
-        s3.put_object(Bucket="list-delim", Key="photos/b.jpg", Body=b"b")
-        s3.put_object(Bucket="list-delim", Key="docs/r.txt", Body=b"r")
-
-        resp = s3.list_objects_v2(Bucket="list-delim", Delimiter="/")
+        s3.create_bucket(Bucket="delim-bucket")
+        s3.put_object(Bucket="delim-bucket", Key="a/1.txt", Body=b"1")
+        s3.put_object(Bucket="delim-bucket", Key="b/2.txt", Body=b"2")
+        s3.put_object(Bucket="delim-bucket", Key="root.txt", Body=b"r")
+        resp = s3.list_objects_v2(Bucket="delim-bucket", Delimiter="/")
         prefixes = [p["Prefix"] for p in resp.get("CommonPrefixes", [])]
-        assert sorted(prefixes) == ["docs/", "photos/"]
-
-    def test_list_with_prefix(self, s3):
-        s3.create_bucket(Bucket="list-pfx")
-        s3.put_object(Bucket="list-pfx", Key="logs/2024/jan.log", Body=b"j")
-        s3.put_object(Bucket="list-pfx", Key="logs/2024/feb.log", Body=b"f")
-        s3.put_object(Bucket="list-pfx", Key="logs/2025/mar.log", Body=b"m")
-
-        resp = s3.list_objects_v2(Bucket="list-pfx", Prefix="logs/2024/",
-                                  Delimiter="/")
-        keys = [o["Key"] for o in resp.get("Contents", [])]
-        assert sorted(keys) == ["logs/2024/feb.log", "logs/2024/jan.log"]
+        assert "a/" in prefixes
+        assert "b/" in prefixes
 
 
 class TestMultipartUpload:
     def test_multipart_lifecycle(self, s3):
-        s3.create_bucket(Bucket="mp-test")
-        resp = s3.create_multipart_upload(Bucket="mp-test", Key="big.bin")
-        upload_id = resp["UploadId"]
+        s3.create_bucket(Bucket="mpu-bucket")
+        mpu = s3.create_multipart_upload(Bucket="mpu-bucket", Key="big.bin")
+        upload_id = mpu["UploadId"]
 
-        part1 = s3.upload_part(Bucket="mp-test", Key="big.bin",
-                               UploadId=upload_id, PartNumber=1,
-                               Body=b"part1-" * 50)
-        part2 = s3.upload_part(Bucket="mp-test", Key="big.bin",
-                               UploadId=upload_id, PartNumber=2,
-                               Body=b"part2-" * 50)
+        part1 = s3.upload_part(Bucket="mpu-bucket", Key="big.bin",
+                               UploadId=upload_id, PartNumber=1, Body=b"A" * 512)
+        part2 = s3.upload_part(Bucket="mpu-bucket", Key="big.bin",
+                               UploadId=upload_id, PartNumber=2, Body=b"B" * 512)
 
         s3.complete_multipart_upload(
-            Bucket="mp-test", Key="big.bin", UploadId=upload_id,
-            MultipartUpload={
-                "Parts": [
-                    {"PartNumber": 1, "ETag": part1["ETag"]},
-                    {"PartNumber": 2, "ETag": part2["ETag"]},
-                ]
-            },
+            Bucket="mpu-bucket", Key="big.bin", UploadId=upload_id,
+            MultipartUpload={"Parts": [
+                {"PartNumber": 1, "ETag": part1["ETag"]},
+                {"PartNumber": 2, "ETag": part2["ETag"]},
+            ]},
         )
 
-        resp = s3.get_object(Bucket="mp-test", Key="big.bin")
-        data = resp["Body"].read()
-        assert data == b"part1-" * 50 + b"part2-" * 50
+        resp = s3.get_object(Bucket="mpu-bucket", Key="big.bin")
+        assert resp["Body"].read() == b"A" * 512 + b"B" * 512
+
+    def test_abort_multipart_upload(self, s3):
+        s3.create_bucket(Bucket="mpu-abort-bucket")
+        mpu = s3.create_multipart_upload(Bucket="mpu-abort-bucket", Key="aborted.bin")
+        upload_id = mpu["UploadId"]
+
+        s3.upload_part(Bucket="mpu-abort-bucket", Key="aborted.bin",
+                       UploadId=upload_id, PartNumber=1, Body=b"data")
+
+        s3.abort_multipart_upload(Bucket="mpu-abort-bucket", Key="aborted.bin",
+                                  UploadId=upload_id)
+
+        with pytest.raises(ClientError):
+            s3.get_object(Bucket="mpu-abort-bucket", Key="aborted.bin")

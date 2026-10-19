@@ -48,8 +48,14 @@ def check_free_threaded() -> None:
         )
 
 
+BUFFER_POOL_BYTES = 256 * 1024 * 1024  # must be >= 2x max_file_bytes (64 MiB default)
+
+
 def open_db(data_dir: str, role: str) -> _bc.DB:
     opts = _bc.Options()
+    opts.io_backend = _bc.IoBackend.BufferPool
+    opts.buffer_pool.capacity_bytes = BUFFER_POOL_BYTES
+    opts.buffer_pool.direct_io = True
     if role == "follower":
         opts.initial_mode = _bc.Mode.Follower
     return _bc.DB.open(data_dir, opts)
