@@ -7,6 +7,7 @@ Granian is not required to run the tests.
 
 import tempfile
 import threading
+import urllib.request
 
 import boto3
 import pytest
@@ -81,6 +82,13 @@ class TestBucketOperations:
         with pytest.raises(ClientError) as exc_info:
             s3.head_bucket(Bucket="nonexistent")
         assert exc_info.value.response["Error"]["Code"] in ("404", "NoSuchBucket")
+
+    def test_bucket_location_with_trailing_slash(self, s3, server):
+        # minio-go (used by warp) requests GET /bucket/?location=
+        s3.create_bucket(Bucket="loc-test")
+        with urllib.request.urlopen(f"{server}/loc-test/?location=") as resp:
+            assert resp.status == 200
+            assert b"LocationConstraint" in resp.read()
 
 
 class TestObjectOperations:

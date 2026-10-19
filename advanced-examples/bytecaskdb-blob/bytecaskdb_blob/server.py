@@ -357,7 +357,9 @@ class BlobFalconApp:
 
         self.app = falcon.App()
         self.app.add_route("/", RootResource(storage))
-        self.app.add_route("/{bucket}", BucketResource(storage))
+        bucket_resource = BucketResource(storage)
+        self.app.add_route("/{bucket}", bucket_resource)
+        self.app.add_route("/{bucket}/", bucket_resource)
         self.app.add_route("/{bucket}/{key:path}", ObjectResource(storage))
 
     def __call__(self, environ, start_response):
