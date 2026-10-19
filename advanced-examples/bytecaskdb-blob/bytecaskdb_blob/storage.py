@@ -16,10 +16,12 @@ import uuid
 from typing import Generator
 
 import bytecaskdb as bc
+from bytecaskdb import _bytecaskdb as _bc
 
 __all__ = ["BlobStorage", "BlobNotFoundError", "BucketNotFoundError", "BucketNotEmptyError", "UploadNotFoundError", "UploadInProgressError"]
 
 DEFAULT_CHUNK_SIZE = 1 * 1024 * 1024  # 1 MiB
+DEFAULT_BUFFER_POOL_BYTES = 256 * 1024 * 1024  # 256 MiB (must be >= 2x max_file_bytes)
 
 
 # ── Exceptions ───────────────────────────────────────────────────────────────
@@ -142,8 +144,19 @@ class BlobStorage:
     """Persistent blob storage engine built on ByteCaskDB."""
 
     def __init__(self, path: str, chunk_size: int = DEFAULT_CHUNK_SIZE,
-                 **open_kwargs) -> None:
-        self._db = bc.DB.open(path, **open_kwargs)
+                 buffer_pool_bytes: int = DEFAULT_BUFFER_POOL_BYTES,
+                 direct_io: bool = True, **open_kwargs) -> None:
+        opts = _bc.Options()
+        for name, value in open_kwargs.items():
+            setattr(opts, name, value)
+        # Sealed files are served from a bounded, engine-owned cache; with
+        # direct_io the frames are filled with O_DIRECT (falls back to
+        # buffered fills if the filesystem refuses it).
+        opts.io_backend = _bc.IoBackend.BufferPool
+        opts.buffer_pool.capacity_bytes = max(buffer_pool_bytes,
+                                              2 * opts.max_file_bytes)
+        opts.buffer_pool.direct_io = direct_io
+        self._db = bc.DB(_bc.DB.open(path, opts))
         self.chunk_size = chunk_size
 
     # ── Buckets ───────────────────────────────────────────────────────────────

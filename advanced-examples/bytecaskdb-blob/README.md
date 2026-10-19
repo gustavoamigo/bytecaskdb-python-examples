@@ -18,12 +18,13 @@ A persistent blob storage engine built on [ByteCaskDB](https://github.com/gustav
 ### Prerequisites
 
 Free-threaded Python (e.g. `python3.14t`) is strongly recommended. The server
-uses [Granian](https://github.com/emmett-framework/granian) with WSGI, where
-each request runs synchronously in its own OS thread. With free-threaded Python
-there is no GIL, so the entire request pipeline — HTTP parsing in Granian's Rust
-layer, Python request handling, and ByteCaskDB I/O — runs in true parallelism
-across all threads. Without free-threading the GIL serialises the Python
-portions, eliminating most of the concurrency benefit.
+uses [Falcon](https://falconframework.org/) as the WSGI framework, served by
+[Granian](https://github.com/emmett-framework/granian), where each request runs
+synchronously in its own OS thread. With free-threaded Python there is no GIL,
+so the entire request pipeline — HTTP parsing in Granian's Rust layer, Falcon
+routing, and ByteCaskDB I/O — runs in true parallelism across all threads.
+Without free-threading the GIL serialises the Python portions, eliminating most
+of the concurrency benefit.
 
 ### Install dependencies
 
@@ -38,6 +39,8 @@ python run_server.py
 ```
 
 The server listens on `http://localhost:8080` by default. Use `--data-dir`, `--host`, `--port`, and `--chunk-size` to customize.
+
+The database is opened with the `BufferPool` I/O backend (256 MiB, filled with `O_DIRECT`). Use `--buffer-pool-bytes` to resize it (must be at least 2x `max_file_bytes`, 64 MiB by default) or `--no-direct-io` to fill it with buffered reads.
 
 ### Use with boto3
 

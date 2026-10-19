@@ -6,7 +6,10 @@ nothing about the application layer (tasks, blobs, etc.). It provides:
   - ReplicationLeader: WSGI handlers that followers call to fetch data
   - ReplicationFollower: background thread that replicates from a leader over HTTP
 
-Wire format: newline-delimited JSON (NDJSON). Each DataEntry is serialized as:
+Wire format: newline-delimited JSON (NDJSON). The first line is the slice
+header produced by ``changes_since()``:
+    {"from_seq": int, "marker": {"since_sequence": int, "id": int}}
+Every following line is a DataEntry:
     {"seq": int, "type": str, "key": base64, "value": base64}
 """
 
@@ -28,7 +31,29 @@ from bytecaskdb import _bytecaskdb as _bc
 
 log = logging.getLogger(__name__)
 
-BATCH_SIZE = 512
+# Leader cuts each slice after the unit that passes this many bytes; the
+# follower keeps pulling slices until it has caught up.
+SLICE_MAX_BYTES = 4 * 1024 * 1024
+
+
+def _encode_header(header: _bc.ChangeHeader) -> bytes:
+    obj = {
+        "from_seq": header.from_sequence,
+        "marker": {
+            "since_sequence": header.marker.since_sequence,
+            "id": header.marker.id,
+        },
+    }
+    return json.dumps(obj, separators=(",", ":")).encode() + b"\n"
+
+
+def _decode_header(line: bytes) -> _bc.ChangeHeader:
+    obj = json.loads(line)
+    marker = _bc.ChangeMarker(
+        since_sequence=obj["marker"]["since_sequence"],
+        id=obj["marker"]["id"],
+    )
+    return _bc.ChangeHeader(marker=marker, from_sequence=obj["from_seq"])
 
 
 def _encode_entry(entry: _bc.DataEntry) -> bytes:
@@ -67,9 +92,9 @@ class ReplicationLeader:
 
     def get_changes(self, from_seq: int = 0) -> bytes:
         snap = self._db.snapshot()
-        it = self._db.changes_since(snap, from_seq)
-        chunks = []
-        for entry in it:
+        batch = self._db.changes_since(snap, from_seq, SLICE_MAX_BYTES)
+        chunks = [_encode_header(batch.header)]
+        for entry in batch:
             chunks.append(_encode_entry(entry))
         return b"".join(chunks)
 
@@ -121,7 +146,8 @@ class ReplicationFollower:
     """Background replication loop that pulls changes from a leader over HTTP.
 
     The follower long-polls the leader's sequence endpoint, fetches new entries
-    as NDJSON, reconstructs DataEntry objects, and calls db.ingest().
+    as NDJSON, reconstructs the ChangeHeader and DataEntry objects, and calls
+    db.ingest(header, entries).
     """
 
     def __init__(self, db: _bc.DB, leader_url: str) -> None:
@@ -241,16 +267,14 @@ class ReplicationFollower:
             )
             resp.raise_for_status()
 
-            entries: list[_bc.DataEntry] = []
-            for line in resp.content.split(b"\n"):
-                line = line.strip()
-                if not line:
-                    continue
-                entries.append(_decode_entry(line))
-
-            if entries:
-                for i in range(0, len(entries), BATCH_SIZE):
-                    batch = entries[i : i + BATCH_SIZE]
-                    self._db.ingest(batch)
+            lines = [ln for ln in resp.content.split(b"\n") if ln.strip()]
+            if not lines:
+                return
+            header = _decode_header(lines[0])
+            entries = [_decode_entry(ln) for ln in lines[1:]]
+            if not entries:
+                time.sleep(0.2)
+                return
+            self._db.ingest(header, entries)
 
             self._last_error = ""
